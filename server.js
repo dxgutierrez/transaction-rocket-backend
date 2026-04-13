@@ -55,9 +55,12 @@ const DEFAULT_SEED = {
     { id:'u1', name:'Daniel Gutierrez', email:'dxgutierrez@kw.com',
       password:'admin123', role:'owner', active:true, chatWebhook:'',
       perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:true,production:true,documents:true,settings:true,onboarding:true} },
-    { id:'u2', name:'Rachelle', email:'transactions@bidwichita.com',
+    { id:'u2', name:'Rachelle', email:'operations@bidwichita.com',
       password:'rachelle123', role:'operations', active:true, chatWebhook:'',
       perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:true,production:true,documents:true,settings:true,onboarding:true} },
+    { id:'u5', name:'Angel Perez', email:'transactions@bidwichita.com',
+      password:'angel123', role:'agent', active:true, chatWebhook:'',
+      perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:false,production:false,documents:true,settings:false,onboarding:true} },
     { id:'u3', name:'Jesus', email:'listings@bidwichita.com',
       password:'auction123', role:'agent', active:true, chatWebhook:'',
       perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:false,production:false,documents:true,settings:false,onboarding:true} },
@@ -109,6 +112,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ── Auth middleware ───────────────────────────────────────────────────
 function requireAuth(req, res, next) {
   if (req.session && req.session.userId) return next();
+  // Log for debugging
+  console.warn('requireAuth failed — session:', JSON.stringify({
+    id: req.sessionID,
+    hasSession: !!req.session,
+    userId: req.session?.userId,
+    cookie: req.headers.cookie ? 'present' : 'missing'
+  }));
   res.status(401).json({ error: 'Not authenticated' });
 }
 
@@ -280,12 +290,29 @@ app.post('/api/users/:id/change-password', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ── API: Session check (for debugging) ───────────────────────────────
+app.get('/api/session-check', (req, res) => {
+  res.json({
+    sessionID: req.sessionID,
+    hasSession: !!req.session,
+    userId: req.session?.userId || null,
+    cookiePresent: !!req.headers.cookie,
+    authenticated: !!(req.session && req.session.userId)
+  });
+});
+
 // ── API: Health ───────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
+  const txns = dbGet('transactions',[]);
+  const contacts = dbGet('contacts',[]);
+  // Include a content hash so frontend can detect any change
+  const lastTxn = txns.length ? txns[txns.length-1].id : '0';
+  const lastContact = contacts.length ? contacts[contacts.length-1].id : '0';
   res.json({
-    status: 'ok', db: DB_PATH,
-    users: dbGet('users',[]).length,
-    transactions: dbGet('transactions',[]).length,
+    status: 'ok',
+    transactions: txns.length,
+    contacts: contacts.length,
+    fingerprint: txns.length + '-' + contacts.length + '-' + lastTxn + '-' + lastContact,
     uptime: Math.round(process.uptime()),
     sessionStore: 'memory'
   });
