@@ -1,6 +1,7 @@
 'use strict';
 const express    = require('express');
 const session    = require('express-session');
+const FileStore  = require('session-file-store')(session);
 const Database   = require('better-sqlite3');
 const path       = require('path');
 const crypto     = require('crypto');
@@ -96,6 +97,12 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use(session({
+  store: new FileStore({
+    path: path.join(DATA_DIR, 'sessions'),
+    ttl: 7 * 24 * 60 * 60,  // 7 days in seconds
+    retries: 3,
+    logFn: () => {}           // silence file store logs
+  }),
   secret: SESS_SECRET,
   resave: false,
   saveUninitialized: false,
@@ -314,7 +321,7 @@ app.get('/api/health', (req, res) => {
     contacts: contacts.length,
     fingerprint: txns.length + '-' + contacts.length + '-' + lastTxn + '-' + lastContact,
     uptime: Math.round(process.uptime()),
-    sessionStore: 'memory'
+    sessionStore: 'file'
   });
 });
 
