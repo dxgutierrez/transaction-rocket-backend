@@ -37,6 +37,9 @@ db.exec(`
   );
 `);
 
+// Clear any corrupted session rows from bad deploys
+try { db.prepare('DELETE FROM sessions').run(); } catch(e) {}
+
 // ── DB helpers ────────────────────────────────────────────────────────
 const stmtGet    = db.prepare('SELECT value FROM store WHERE key = ?');
 const stmtSet    = db.prepare('INSERT OR REPLACE INTO store (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))');
