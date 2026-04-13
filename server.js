@@ -126,6 +126,10 @@ for (const key of PERSISTENT_KEYS) {
 
 // ── Express setup ─────────────────────────────────────────────────────
 const app = express();
+
+// Trust Render's reverse proxy so secure cookies work over HTTPS
+app.set('trust proxy', 1);
+
 app.use(express.json({ limit: '50mb' }));       // large for PDF uploads
 app.use(express.urlencoded({ extended: true }));
 
@@ -140,8 +144,9 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: IS_PROD,        // HTTPS only in production
+    secure: IS_PROD,        // HTTPS only in production (trust proxy handles this)
     httpOnly: true,
+    sameSite: IS_PROD ? 'lax' : 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000  // 7 days
   }
 }));
@@ -212,11 +217,12 @@ app.post('/api/login', (req, res) => {
   const forceChange = isDefaultPassword(password) || user._forcePasswordChange;
 
   req.session.userId = user.id;
-  req.session.save();
-
-  // Return user without password
-  const { password: _pw, ...safeUser } = user;
-  res.json({ user: safeUser, forcePasswordChange: forceChange });
+  req.session.save(err => {
+    if (err) return res.status(500).json({ error: 'Session error' });
+    // Return user without password
+    const { password: _pw, ...safeUser } = user;
+    res.json({ user: safeUser, forcePasswordChange: forceChange });
+  });
 });
 
 app.post('/api/logout', (req, res) => {
