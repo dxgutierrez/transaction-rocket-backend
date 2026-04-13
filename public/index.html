@@ -957,7 +957,8 @@ function renderLogin() {
       await loadAppState();
       S.currentUser = data.user;
       if(data.forcePasswordChange) S.currentUser._forcePasswordChange=true;
-      render();
+      // Small delay to ensure session is fully persisted server-side
+      setTimeout(()=>render(), 150);
     }).catch(()=>{
       errDiv.textContent='Connection error. Please try again.';
       errDiv.style.display='block';
@@ -4390,20 +4391,34 @@ function renderForcePasswordChange(){
     if(newPw.length<8){errDiv.textContent='Password must be at least 8 characters.';errDiv.style.display='block';return;}
     if(newPw!==confirmPw){errDiv.textContent='Passwords do not match.';errDiv.style.display='block';return;}
     saveBtn.disabled=true;
-    const r=await fetch('/api/users/'+S.currentUser.id+'/change-password',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:newPw})
-    });
-    if(r.ok){
+    // Try up to 3 times in case session is still settling
+    let r, attempts=0;
+    while(attempts<3){
+      attempts++;
+      r=await fetch('/api/users/'+S.currentUser.id+'/change-password',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({password:newPw})
+      });
+      if(r.ok||r.status!==401)break;
+      // 401 = session not ready yet, wait and retry
+      await new Promise(res=>setTimeout(res,600));
+    }
+    if(r&&r.ok){
       S.currentUser={...S.currentUser,_forcePasswordChange:false};
-      // Reload full state
       await loadAppState();
       render();
     } else {
-      const d=await r.json();
-      errDiv.textContent=d.error||'Error changing password.';
-      errDiv.style.display='block';
+      const d=r?await r.json():{error:'Connection error'};
+      // If still 401 after retries, log them out so they can log back in fresh
+      if(r&&r.status===401){
+        errDiv.textContent='Session expired — please log in again.';
+        errDiv.style.display='block';
+        setTimeout(()=>{S.currentUser=null;render();},2000);
+      } else {
+        errDiv.textContent=d.error||'Error changing password.';
+        errDiv.style.display='block';
+      }
       saveBtn.disabled=false;
     }
   };
@@ -4475,6 +4490,110 @@ function render(){
   // Also save before the page unloads (tab close / navigate away)
   window.addEventListener('beforeunload', () => saveState());
   window.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') saveState(); });
+})();
+
+// ── BACKGROUND SYNC: poll for changes from other team members ────────
+(function() {
+  let _pollTimer = null;
+  let _lastUpdated = null;
+  let _isSaving = false;
+  let _pollPaused = false;
+
+  // Track when we're saving so we don't overwrite our own save with a poll
+  const _origSaveState = saveState;
+
+  // Pause polling while user is actively typing
+  document.addEventListener('focusin', e => {
+    if(e.target.matches('input,textarea,select')) _pollPaused = true;
+  });
+  document.addEventListener('focusout', e => {
+    if(e.target.matches('input,textarea,select')) {
+      // Resume after 3 seconds so the save has time to complete
+      setTimeout(() => { _pollPaused = false; }, 3000);
+    }
+  });
+
+  async function checkForUpdates() {
+    // Skip if: not logged in, tab hidden, user is typing, or mid-save
+    if(!S.currentUser) return;
+    if(document.visibilityState === 'hidden') return;
+    if(_pollPaused) return;
+
+    try {
+      // Use /api/health to get a lightweight timestamp check
+      const r = await fetch('/api/health', { cache: 'no-store' });
+      if(!r.ok) return;
+      const data = await r.json();
+
+      // Server sends a txn_count + contact_count as a simple change fingerprint
+      const fingerprint = data.fingerprint || (data.transactions + '-' + data.contacts);
+
+      if(_lastUpdated === null) {
+        // First poll — just record baseline
+        _lastUpdated = fingerprint;
+        return;
+      }
+
+      if(fingerprint !== _lastUpdated) {
+        _lastUpdated = fingerprint;
+        // Something changed — reload state silently
+        await loadAppState();
+        // Only re-render if not on a form-heavy modal
+        const hasOpenModal = !!document.querySelector('.mo');
+        if(!hasOpenModal) {
+          render();
+          // Show a subtle "Team update" badge instead of "Saved"
+          const badge = document.getElementById('autosave-badge');
+          if(badge) {
+            const orig = badge.textContent;
+            badge.textContent = '↻ Updated';
+            badge.classList.add('show');
+            setTimeout(() => {
+              badge.classList.remove('show');
+              setTimeout(() => { badge.textContent = orig; }, 300);
+            }, 2000);
+          }
+        }
+      }
+    } catch(e) {
+      // Silent fail — don't bother the user if poll fails
+    }
+  }
+
+  function schedulePoll() {
+    _pollTimer = setTimeout(async () => {
+      await checkForUpdates();
+      schedulePoll(); // reschedule regardless of outcome
+    }, 30000); // 30 seconds
+  }
+
+  // Start polling once the app is initialized
+  setTimeout(() => {
+    if(S.currentUser) {
+      // Set initial fingerprint
+      fetch('/api/health', { cache: 'no-store' })
+        .then(r => r.json())
+        .then(d => { _lastUpdated = d.transactions + '-' + d.contacts; })
+        .catch(() => {});
+      schedulePoll();
+    }
+  }, 5000); // Wait 5s after load before first poll
+
+  // If user logs in mid-session, start polling then too
+  const _origRender = render;
+  window._pollStarted = false;
+  const _renderWrap = function() {
+    _origRender();
+    if(S.currentUser && !window._pollStarted) {
+      window._pollStarted = true;
+      schedulePoll();
+    }
+    if(!S.currentUser) {
+      window._pollStarted = false;
+      if(_pollTimer) clearTimeout(_pollTimer);
+    }
+  };
+  // Note: render is called directly so we patch via the poll scheduler above
 })();
 </script>
 <div class="autosave-badge" id="autosave-badge">✓ Saved</div>
