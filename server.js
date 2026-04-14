@@ -107,7 +107,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: IS_PROD,
+    secure: false,   // Render terminates SSL at proxy — cookie travels HTTP internally
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000
@@ -173,15 +173,24 @@ app.post('/api/login', (req, res) => {
   }
 
   const forceChange = DEFAULT_PLAINTEXT.has(password) || !!user._forcePasswordChange;
-  req.session.userId = user.id;
+  const userId = user.id;
 
-  req.session.save(err => {
+  // Regenerate session to avoid fixation attacks and force a clean session
+  req.session.regenerate(err => {
     if (err) {
-      console.error('Session save error:', err);
+      console.error('Session regenerate error:', err);
       return res.status(500).json({ error: 'Session error — please try again' });
     }
-    const { password: _pw, ...safeUser } = user;
-    res.json({ user: safeUser, forcePasswordChange: forceChange });
+    req.session.userId = userId;
+    req.session.save(err2 => {
+      if (err2) {
+        console.error('Session save error:', err2);
+        return res.status(500).json({ error: 'Session error — please try again' });
+      }
+      console.log('Login success — session saved, userId:', userId, 'sessionID:', req.sessionID);
+      const { password: _pw, ...safeUser } = user;
+      res.json({ user: safeUser, forcePasswordChange: forceChange });
+    });
   });
 });
 
