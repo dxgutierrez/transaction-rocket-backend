@@ -1286,6 +1286,16 @@ function renderTxnDetail() {
   tright.appendChild(btn('📧 Email','bg bsm',()=>showEmailWithTemplate(txn)));
   tright.appendChild(btn('💬','bg bsm',()=>showSMS(txn.client1Phone||'','Hi '+(txn.client1Name||'').split(' ')[0]+', ')));
   tright.appendChild(btn('✏️ Edit','bp bsm',()=>showEditTxnModal(txn)));
+  if(txn.commandLink){
+    const cmdBtn=el('a',{'href':txn.commandLink,'target':'_blank','class':'btn bg bsm','style':{textDecoration:'none',display:'inline-flex',alignItems:'center',gap:'5px'}});
+    cmdBtn.innerHTML='<span style="font-size:11px">⌘</span> Command';
+    tright.appendChild(cmdBtn);
+  }
+  if(txn.transactionDeskLink){
+    const tdBtn=el('a',{'href':txn.transactionDeskLink,'target':'_blank','class':'btn bg bsm','style':{textDecoration:'none',display:'inline-flex',alignItems:'center',gap:'5px'}});
+    tdBtn.innerHTML='✍️ TD / Sign';
+    tright.appendChild(tdBtn);
+  }
   if(txn.status==='active'){
     tright.appendChild(btn('📜 Under Contract','bg bsm',()=>{
       if(confirm('Mark as Under Contract and send team notifications?')){
@@ -1641,6 +1651,17 @@ function showNewTxnModal(){
       ar.appendChild(b);
     });
     ag.appendChild(ar);body.appendChild(ag);
+    body.appendChild(el('div',{'class':'divider'}));
+    const cmdWrap2=el('div',{'class':'fg'});
+    cmdWrap2.appendChild(el('label',{'class':'fl'},'KW Command Link (optional)'));
+    const cmdInp2=el('input',{'class':'fi','type':'url','placeholder':'https://console.command.kw.com/command/opportunities/details?...'});
+    cmdInp2.oninput=e=>{data.commandLink=e.target.value.trim();};
+    cmdWrap2.appendChild(cmdInp2);body.appendChild(cmdWrap2);
+    const tdWrap2=el('div',{'class':'fg'});
+    tdWrap2.appendChild(el('label',{'class':'fl'},'TransactionDesk / Authentisign Link (optional)'));
+    const tdInp2=el('input',{'class':'fi','type':'url','placeholder':'https://pr.transactiondesk.com/transaction/detail/...'});
+    tdInp2.oninput=e=>{data.transactionDeskLink=e.target.value.trim();};
+    tdWrap2.appendChild(tdInp2);body.appendChild(tdWrap2);
   },f=>{
     f.appendChild(btn('Cancel','bg',()=>close()));
     f.appendChild(btn('Create Transaction','bp',()=>{
@@ -1699,6 +1720,23 @@ function showEditTxnModal(txn){
     gc.appendChild(fld('TC Fee','tcFee',data.tcFee,set,'text','e.g. $395'));
     gc.appendChild(fld('Net GCI (override)','netGCI',data.netGCI,set,'text','leave blank to auto-calculate'));
     body.appendChild(gc);
+    body.appendChild(el('div',{'class':'divider'}));
+    const cmdWrap=el('div',{'class':'fg'});
+    cmdWrap.appendChild(el('label',{'class':'fl'},'KW Command Opportunity Link'));
+    const cmdInp=el('input',{'class':'fi','type':'url','placeholder':'https://console.command.kw.com/command/opportunities/details?...'});
+    cmdInp.value=data.commandLink||'';
+    cmdInp.oninput=e=>{data.commandLink=e.target.value.trim();};
+    const cmdNote=el('div',{'style':{fontSize:'11px',color:'var(--text3)',marginTop:'4px'}});
+    cmdNote.textContent='Paste the full URL from KW Command. Will appear as a button on the transaction.';
+    cmdWrap.appendChild(cmdInp);cmdWrap.appendChild(cmdNote);body.appendChild(cmdWrap);
+    const tdWrap=el('div',{'class':'fg'});
+    tdWrap.appendChild(el('label',{'class':'fl'},'TransactionDesk / Authentisign Link'));
+    const tdInp=el('input',{'class':'fi','type':'url','placeholder':'https://pr.transactiondesk.com/transaction/detail/...'});
+    tdInp.value=data.transactionDeskLink||'';
+    tdInp.oninput=e=>{data.transactionDeskLink=e.target.value.trim();};
+    const tdNote=el('div',{'style':{fontSize:'11px',color:'var(--text3)',marginTop:'4px'}});
+    tdNote.textContent='Paste the TransactionDesk URL. Opens directly to the transaction for quick e-signature access.';
+    tdWrap.appendChild(tdInp);tdWrap.appendChild(tdNote);body.appendChild(tdWrap);
     body.appendChild(tfld('Notes','notes',data.notes,set,3));
   },f=>{
     f.appendChild(btn('Cancel','bg',()=>close()));
