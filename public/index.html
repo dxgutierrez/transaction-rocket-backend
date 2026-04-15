@@ -1986,7 +1986,13 @@ function renderTasks(){
   us.onchange=e=>setState({taskUser:e.target.value});top.appendChild(us);div.appendChild(top);
   const allTasks=[];
   S.transactions.filter(t=>t.status==='active').forEach(txn=>{
+    const phases=S.phases[txn.type]||[];
+    const curPhaseIdx=phases.indexOf(txn.phase);
+    // Only show tasks from current phase and earlier (not future phases)
     Object.entries(S.templates[txn.type]||{}).forEach(([phase,tasks])=>{
+      const phaseIdx=phases.indexOf(phase);
+      // Skip phases that haven't started yet (after current phase)
+      if(phaseIdx>curPhaseIdx)return;
       tasks.forEach(task=>{
         const assignee=txn.taskAssignees?.[task.id]||task.assignee;
         const dueDate=computeTaskDueDate(txn,task);
