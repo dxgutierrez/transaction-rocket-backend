@@ -679,19 +679,28 @@ function hashPasswordSync(plain){
 }
 function isHashed(pw){ return /^[a-f0-9]{64}$/i.test(pw); }
 function passwordStrength(pw){
-  if(!pw)return{score:0,label:'',color:'var(--border2)'};
+  if(!pw)return{score:0,label:'',color:'var(--border2)',valid:false};
   let score=0;
+  const hasUpper=/[A-Z]/.test(pw);
+  const hasNum=/[0-9]/.test(pw);
+  const hasSpecial=/[^A-Za-z0-9]/.test(pw);
   if(pw.length>=8)score++;if(pw.length>=12)score++;
-  if(/[A-Z]/.test(pw))score++;if(/[0-9]/.test(pw))score++;if(/[^A-Za-z0-9]/.test(pw))score++;
+  if(hasUpper)score++;if(hasNum)score++;if(hasSpecial)score++;
+  // Must meet minimums to be valid
+  const valid=pw.length>=8&&hasUpper&&hasNum;
+  const hints=[];
+  if(pw.length<8)hints.push('8+ chars');
+  if(!hasUpper)hints.push('uppercase');
+  if(!hasNum)hints.push('number');
   const levels=[
-    {score:0,label:'',color:'var(--border2)'},
-    {score:1,label:'Too short',color:'var(--red)'},
-    {score:2,label:'Weak',color:'var(--amber)'},
-    {score:3,label:'Fair',color:'var(--amber)'},
-    {score:4,label:'Good',color:'var(--green)'},
-    {score:5,label:'Strong',color:'var(--green)'},
+    {score:0,label:'',color:'var(--border2)',valid:false},
+    {score:1,label:'Too weak'+( hints.length?' — need: '+hints.join(', '):''),color:'var(--red)',valid:false},
+    {score:2,label:valid?'Fair':'Need: '+hints.join(', '),color:valid?'var(--amber)':'var(--red)',valid},
+    {score:3,label:'Fair',color:'var(--amber)',valid:true},
+    {score:4,label:'Good',color:'var(--green)',valid:true},
+    {score:5,label:'Strong',color:'var(--green)',valid:true},
   ];
-  return levels[Math.min(score,5)];
+  return {...levels[Math.min(score,5)],valid};
 }
 // Default passwords that must be changed
 const DEFAULT_PASSWORDS_HASHED=new Set();
@@ -958,7 +967,11 @@ function renderLogin() {
     }).then(async r=>{
       const data=await r.json();
       if(!r.ok){
-        errDiv.textContent=data.error||'Invalid email or password.';
+        let msg = data.error || 'Invalid email or password.';
+        if(data.attemptsRemaining !== undefined && data.attemptsRemaining > 0){
+          msg += ` (${data.attemptsRemaining} attempt${data.attemptsRemaining!==1?'s':''} remaining)`;
+        }
+        errDiv.textContent = msg;
         errDiv.style.display='block';
         loginBtn.disabled=false; loginBtn.textContent='Sign In';
         return;
@@ -4019,6 +4032,95 @@ function showQuickLinkModal(existing){
   },'mdlg');
 }
 
+// ====================================================================
+// SECURITY TAB (Owner only)
+// ====================================================================
+function renderSecurityTab(){
+  const div=el('div');
+  const isOwner=S.currentUser?.role==='owner';
+
+  // Password policy card
+  const polCard=el('div',{'class':'card','style':{marginBottom:'16px'}});
+  polCard.innerHTML='<div class="ch"><div class="ct">🔒 Password Policy</div></div>';
+  const polBody=el('div',{'class':'cb'});
+  const rules=[
+    '✅ Minimum 8 characters',
+    '✅ At least one uppercase letter',
+    '✅ At least one number',
+    '✅ Passwords are hashed with SHA-256 before storage',
+    '✅ Default passwords force a change on first login',
+  ];
+  rules.forEach(r=>{
+    const row=el('div',{'style':{padding:'5px 0',fontSize:'13px',color:'var(--text2)',borderBottom:'1px solid var(--border)'}});
+    row.textContent=r;polBody.appendChild(row);
+  });
+  polCard.appendChild(polBody);div.appendChild(polCard);
+
+  // Rate limiting card
+  const rlCard=el('div',{'class':'card','style':{marginBottom:'16px'}});
+  rlCard.innerHTML='<div class="ch"><div class="ct">🛡️ Brute Force Protection</div></div>';
+  const rlBody=el('div',{'class':'cb'});
+  rlBody.innerHTML='<p style="font-size:13px;color:var(--text2);margin-bottom:8px">Login attempts are rate limited per IP address.</p>';
+  const rlStats=el('div',{'style':{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}});
+  [[' Max attempts','5 before lockout'],['Lockout duration','15 minutes'],['Auto-reset','After lockout expires'],['Scope','Per IP address']].forEach(([l,v])=>{
+    const s=el('div',{'style':{background:'var(--surface2)',borderRadius:'8px',padding:'10px 12px',border:'1px solid var(--border)'}});
+    s.innerHTML=`<div style="font-size:10px;font-weight:600;color:var(--text4);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">${l}</div><div style="font-size:13px;font-weight:600;color:var(--text1)">${v}</div>`;
+    rlStats.appendChild(s);
+  });
+  rlBody.appendChild(rlStats);rlCard.appendChild(rlBody);div.appendChild(rlCard);
+
+  // Audit log — Owner only
+  if(!isOwner){
+    const note=el('div',{'style':{background:'var(--amber-lt)',border:'1px solid var(--amber-bd)',borderRadius:'8px',padding:'12px 14px',fontSize:'13px',color:'var(--amber)'}});
+    note.textContent='The audit log is visible to Owner accounts only.';
+    div.appendChild(note);return div;
+  }
+
+  const auditCard=el('div',{'class':'card'});
+  const auditHdr=el('div',{'class':'ch'});
+  auditHdr.innerHTML='<div class="ct">📋 Login Audit Log</div>';
+  const refreshBtn=btn('↻ Refresh','bg bsm',()=>loadAuditLog(auditBody));
+  auditHdr.appendChild(refreshBtn);
+  auditCard.appendChild(auditHdr);
+  const auditBody=el('div',{'class':'cb','style':{padding:'0'}});
+
+  function loadAuditLog(container){
+    container.innerHTML='<div style="padding:14px;font-size:12px;color:var(--text4)">Loading...</div>';
+    fetch('/api/audit',{headers:authHeaders()}).then(r=>r.json()).then(logs=>{
+      container.innerHTML='';
+      if(!logs.length){
+        container.innerHTML='<div class="empty"><div class="ei">📋</div><p>No activity logged yet.</p></div>';
+        return;
+      }
+      const iconMap={LOGIN_SUCCESS:'✅',LOGIN_FAILED:'❌',LOGIN_BLOCKED:'🚫',LOGOUT:'👋',PASSWORD_RESET:'🔑',PASSWORD_CHANGED:'🔑',USER_CREATED:'👤',USER_UPDATED:'✏️',USER_DELETED:'🗑️'};
+      const colorMap={LOGIN_SUCCESS:'var(--green)',LOGIN_FAILED:'var(--red)',LOGIN_BLOCKED:'var(--red)',LOGOUT:'var(--text4)',PASSWORD_RESET:'var(--amber)',PASSWORD_CHANGED:'var(--amber)',USER_CREATED:'var(--sky)',USER_UPDATED:'var(--sky)',USER_DELETED:'var(--red)'};
+      logs.forEach(log=>{
+        const row=el('div',{'style':{display:'grid',gridTemplateColumns:'28px 1fr auto',gap:'10px',alignItems:'center',padding:'9px 14px',borderBottom:'1px solid var(--border)',fontSize:'12px'}});
+        const icon=el('div',{'style':{fontSize:'14px',textAlign:'center'}});icon.textContent=iconMap[log.action]||'📌';
+        const info=el('div');
+        const action=el('div',{'style':{fontWeight:'600',color:colorMap[log.action]||'var(--text2)'}});
+        action.textContent=log.action.replace(/_/g,' ');
+        const detail=el('div',{'style':{color:'var(--text3)',marginTop:'1px'}});
+        detail.textContent=[log.user_email,log.detail].filter(Boolean).join(' — ');
+        info.appendChild(action);info.appendChild(detail);
+        const meta=el('div',{'style':{textAlign:'right',color:'var(--text4)',whiteSpace:'nowrap'}});
+        const dt=new Date(log.ts+'Z');
+        meta.innerHTML=`<div>${dt.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div><div>${dt.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div><div style="font-size:10px;margin-top:1px">${log.ip||''}</div>`;
+        row.appendChild(icon);row.appendChild(info);row.appendChild(meta);
+        container.appendChild(row);
+      });
+    }).catch(()=>{
+      container.innerHTML='<div style="padding:14px;color:var(--red);font-size:12px">Error loading audit log.</div>';
+    });
+  }
+
+  auditCard.appendChild(auditBody);
+  div.appendChild(auditCard);
+  loadAuditLog(auditBody);
+  return div;
+}
+
+
 function renderEmailTemplatesTab(){
   const div=el('div');
   const hdr=el('div',{'style':{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px'}});
@@ -4054,7 +4156,7 @@ function renderEmailTemplatesTab(){
 function renderSettings(){
   const div=el('div',{'class':'content'});
   const tabs=el('div',{'class':'stab'});
-  [['users','👥 Users'],['templates','📋 Templates'],['phases','🔀 Phases'],['emailtemplates','📧 Email Templates'],['quicklinks','🔗 Quick Links'],['profile','👤 My Profile']].forEach(([id,lbl])=>{
+  [['users','👥 Users'],['templates','📋 Templates'],['phases','🔀 Phases'],['emailtemplates','📧 Email Templates'],['quicklinks','🔗 Quick Links'],['security','🔒 Security'],['profile','👤 My Profile']].forEach(([id,lbl])=>{
     const t=el('div',{'class':'stabitem'+(S.settingsTab===id?' active':'')},lbl);
     t.onclick=()=>setState({settingsTab:id});tabs.appendChild(t);
   });
@@ -4064,6 +4166,7 @@ function renderSettings(){
   else if(S.settingsTab==='phases')div.appendChild(renderPhasesTab());
   else if(S.settingsTab==='emailtemplates')div.appendChild(renderEmailTemplatesTab());
   else if(S.settingsTab==='quicklinks')div.appendChild(renderQuickLinksTab());
+  else if(S.settingsTab==='security')div.appendChild(renderSecurityTab());
   else div.appendChild(renderProfileTab());
   return div;
 }
@@ -4135,7 +4238,7 @@ function showUserModal(existing){
     // Password field with strength indicator
     const pwWrap=el('div',{'class':'fg'});
     pwWrap.appendChild(el('label',{'class':'fl'},isNew?'Password':'New Password (leave blank to keep)'));
-    const pwInp=el('input',{'class':'fi','type':'password','placeholder':isNew?'Min 8 characters':'Leave blank to keep current'});
+    const pwInp=el('input',{'class':'fi','type':'password','placeholder':isNew?'8+ chars, 1 uppercase, 1 number':'Leave blank to keep current'});
     const strRow=el('div',{'style':{display:'flex',alignItems:'center',gap:'8px',marginTop:'5px'}});
     const strBar=el('div',{'style':{flex:'1',height:'3px',background:'var(--border)',borderRadius:'100px',overflow:'hidden'}});
     const strFill=el('div',{'style':{height:'3px',borderRadius:'100px',width:'0%',transition:'all .2s'}});
@@ -4419,7 +4522,7 @@ function renderForcePasswordChange(){
   card.appendChild(errDiv);
   const pwFld=el('div',{'class':'fg'});
   pwFld.appendChild(el('label',{'class':'fl'},'New Password'));
-  const pwInp=el('input',{'class':'fi','type':'password','placeholder':'At least 8 characters'});
+  const pwInp=el('input',{'class':'fi','type':'password','placeholder':'8+ chars, 1 uppercase, 1 number'});
   // Strength bar
   const strBar=el('div',{'style':{height:'3px',background:'var(--border)',borderRadius:'100px',marginTop:'5px',overflow:'hidden'}});
   const strFill=el('div',{'style':{height:'3px',borderRadius:'100px',width:'0%',transition:'all .2s'}});
