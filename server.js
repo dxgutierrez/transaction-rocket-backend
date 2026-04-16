@@ -6,19 +6,44 @@ const path     = require('path');
 const crypto   = require('crypto');
 const fs       = require('fs');
 
-const PORT        = process.env.PORT || 3000;
-const DATA_DIR    = process.env.DATA_DIR || path.join(__dirname, 'data');
-const DB_PATH     = path.join(DATA_DIR, 'rocket.db');
-const JWT_SECRET  = process.env.SESSION_SECRET || 'change-me-' + crypto.randomBytes(16).toString('hex');
+const PORT       = process.env.PORT || 3000;
+const DATA_DIR   = process.env.DATA_DIR || path.join(__dirname, 'data');
+const DB_PATH    = path.join(DATA_DIR, 'rocket.db');
+const JWT_SECRET = process.env.SESSION_SECRET || (() => {
+  console.warn('⚠️  SESSION_SECRET not set — using random key. Set it in Render environment variables!');
+  return crypto.randomBytes(64).toString('hex');
+})();
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// Warn if secret is too short
+if (JWT_SECRET.length < 32) console.warn('⚠️  SESSION_SECRET is too short — use at least 32 random characters');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// ── Database ──────────────────────────────────────────────────────────
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
-db.exec(`CREATE TABLE IF NOT EXISTS store (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now')));`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS store (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         TEXT NOT NULL DEFAULT (datetime('now')),
+    user_id    TEXT,
+    user_email TEXT,
+    action     TEXT NOT NULL,
+    ip         TEXT,
+    detail     TEXT
+  );
+`);
 
-const stmtGet = db.prepare('SELECT value FROM store WHERE key = ?');
-const stmtSet = db.prepare("INSERT OR REPLACE INTO store (key, value, updated_at) VALUES (?, ?, datetime('now'))");
+const stmtGet      = db.prepare('SELECT value FROM store WHERE key = ?');
+const stmtSet      = db.prepare("INSERT OR REPLACE INTO store (key, value, updated_at) VALUES (?, ?, datetime('now'))");
+const stmtAudit    = db.prepare("INSERT INTO audit_log (user_id, user_email, action, ip, detail) VALUES (?, ?, ?, ?, ?)");
+const stmtAuditGet = db.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 200");
 
 function dbGet(key, fallback = null) {
   const row = stmtGet.get(key);
@@ -27,7 +52,89 @@ function dbGet(key, fallback = null) {
 }
 function dbSet(key, value) { stmtSet.run(key, JSON.stringify(value)); }
 
-const PERSISTENT_KEYS = ['transactions','contacts','users','templates','phases','customEvents','documents','emailTemplates','savedViews','dailyActivity','chatSpaces','quickLinks','onboardingItems','teamChatWebhook','agentView'];
+function audit(userId, email, action, ip, detail = '') {
+  try { stmtAudit.run(userId || null, email || null, action, ip || null, detail || null); } catch(e) {}
+}
+
+function getClientIp(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
+}
+
+// ── Rate limiter (in-memory, per IP) ─────────────────────────────────
+// Tracks failed login attempts. After 5 failures → 15 min lockout.
+const loginAttempts = new Map(); // ip → { count, lockedUntil }
+const MAX_ATTEMPTS  = 5;
+const LOCKOUT_MS    = 15 * 60 * 1000; // 15 minutes
+
+function checkRateLimit(ip) {
+  const now  = Date.now();
+  const rec  = loginAttempts.get(ip);
+  if (!rec) return { allowed: true };
+  if (rec.lockedUntil && now < rec.lockedUntil) {
+    const mins = Math.ceil((rec.lockedUntil - now) / 60000);
+    return { allowed: false, retryAfter: mins };
+  }
+  return { allowed: true };
+}
+
+function recordFailedAttempt(ip) {
+  const now = Date.now();
+  const rec = loginAttempts.get(ip) || { count: 0 };
+  rec.count++;
+  if (rec.count >= MAX_ATTEMPTS) {
+    rec.lockedUntil = now + LOCKOUT_MS;
+    rec.count = 0;
+  }
+  loginAttempts.set(ip, rec);
+}
+
+function clearAttempts(ip) {
+  loginAttempts.delete(ip);
+}
+
+// Clean up stale records every 30 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, rec] of loginAttempts.entries()) {
+    if (!rec.lockedUntil || now > rec.lockedUntil) loginAttempts.delete(ip);
+  }
+}, 30 * 60 * 1000);
+
+// ── Input sanitization ────────────────────────────────────────────────
+function sanitize(val) {
+  if (typeof val !== 'string') return val;
+  return val
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+}
+
+function sanitizeDeep(obj) {
+  if (typeof obj === 'string') return sanitize(obj);
+  if (Array.isArray(obj)) return obj.map(sanitizeDeep);
+  if (obj && typeof obj === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      // Don't sanitize known URL fields or hashed passwords
+      if (['commandLink','transactionDeskLink','link','url','pdfData','fileDataUrl','password'].includes(k)) {
+        out[k] = v;
+      } else {
+        out[k] = sanitizeDeep(v);
+      }
+    }
+    return out;
+  }
+  return obj;
+}
+
+// ── Seed data ─────────────────────────────────────────────────────────
+const PERSISTENT_KEYS = [
+  'transactions','contacts','users','templates','phases','customEvents',
+  'documents','emailTemplates','savedViews','dailyActivity','chatSpaces',
+  'quickLinks','onboardingItems','teamChatWebhook','agentView'
+];
 
 const SEED_USERS = [
   { id:'u1', name:'Daniel Gutierrez', email:'dxgutierrez@kw.com', password:'admin123', role:'owner', active:true, chatWebhook:'', perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:true,production:true,documents:true,settings:true,onboarding:true} },
@@ -38,7 +145,8 @@ const SEED_USERS = [
 ];
 
 const DEFAULT_SEED = {
-  transactions:[],contacts:[],users:SEED_USERS,templates:{},phases:{},customEvents:[],documents:[],emailTemplates:[],savedViews:[],dailyActivity:{},teamChatWebhook:'',agentView:'Daniel Gutierrez',
+  transactions:[],contacts:[],users:SEED_USERS,templates:{},phases:{},customEvents:[],documents:[],
+  emailTemplates:[],savedViews:[],dailyActivity:{},teamChatWebhook:'',agentView:'Daniel Gutierrez',
   chatSpaces:[{id:'cs1',name:'Team Space',url:'',type:'team'},{id:'cs2',name:'Closing Space',url:'',type:'closing'},{id:'cs3',name:'Marketing Space',url:'',type:'marketing'},{id:'cs4',name:'Admin Space',url:'',type:'admin'}],
   quickLinks:[{id:'ql1',label:'KW Command',url:'https://agent.kw.com',color:'#B42318'},{id:'ql2',label:'Authentisign',url:'https://app.authentisign.com',color:'#1D4ED8'},{id:'ql3',label:'Paragon MLS',url:'https://paragonrels.com',color:'#027A48'},{id:'ql4',label:'BidWichita',url:'https://bidwichita.com',color:'#7C3AED'}],
   onboardingItems:null
@@ -48,17 +156,57 @@ for (const key of PERSISTENT_KEYS) {
   if (!stmtGet.get(key)) dbSet(key, DEFAULT_SEED[key] ?? null);
 }
 
+// ── Express ───────────────────────────────────────────────────────────
 const app = express();
+
+// ── Security headers (item 3) ─────────────────────────────────────────
+app.use((req, res, next) => {
+  // Force HTTPS
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // Prevent clickjacking
+  res.setHeader('X-Frame-Options', 'DENY');
+  // Prevent MIME sniffing
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // XSS filter (legacy browsers)
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  // Content Security Policy — restricts what can load
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "img-src 'self' data: blob:; " +
+    "connect-src 'self' https://chat.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com; " +
+    "frame-ancestors 'none';"
+  );
+  // Don't send referrer outside origin
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // Disable browser features we don't use
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // Remove fingerprinting header
+  res.removeHeader('X-Powered-By');
+  next();
+});
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ── Password hashing ──────────────────────────────────────────────────
 function hashPassword(plain) {
   if (!plain) return '';
   if (/^[a-f0-9]{64}$/i.test(plain)) return plain;
   return crypto.createHash('sha256').update(plain).digest('hex');
 }
 function isHashed(pw) { return /^[a-f0-9]{64}$/i.test(pw); }
+
+// ── Password complexity check (item 7) ───────────────────────────────
+function checkPasswordComplexity(pw) {
+  if (!pw || pw.length < 8) return 'Password must be at least 8 characters';
+  if (!/[A-Z]/.test(pw))    return 'Password must contain at least one uppercase letter';
+  if (!/[0-9]/.test(pw))    return 'Password must contain at least one number';
+  return null; // null = valid
+}
 
 const DEFAULT_PLAINTEXT = new Set(['admin123','rachelle123','auction123','angel123']);
 
@@ -97,29 +245,64 @@ function requireRole(...roles) {
   };
 }
 
-// ── Auth routes ───────────────────────────────────────────────────────
+// ── API: Auth (with rate limiting — item 1) ───────────────────────────
 app.post('/api/login', (req, res) => {
+  const ip = getClientIp(req);
+
+  // Check rate limit
+  const limit = checkRateLimit(ip);
+  if (!limit.allowed) {
+    audit(null, req.body?.email, 'LOGIN_BLOCKED', ip, `Rate limited — try again in ${limit.retryAfter} min`);
+    return res.status(429).json({
+      error: `Too many failed attempts. Please try again in ${limit.retryAfter} minute${limit.retryAfter !== 1 ? 's' : ''}.`
+    });
+  }
+
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-  const users = dbGet('users', []);
+
+  const users  = dbGet('users', []);
   const hashed = hashPassword(password);
-  const user = users.find(u =>
+  const user   = users.find(u =>
     u.email.toLowerCase() === email.toLowerCase() && u.active &&
     (u.password === hashed || (!isHashed(u.password) && u.password === password))
   );
-  if (!user) return res.status(401).json({ error: 'Invalid email or password' });
+
+  if (!user) {
+    recordFailedAttempt(ip);
+    audit(null, email, 'LOGIN_FAILED', ip, 'Invalid credentials');
+    const rec = loginAttempts.get(ip);
+    const remaining = rec ? Math.max(0, MAX_ATTEMPTS - rec.count) : MAX_ATTEMPTS;
+    return res.status(401).json({
+      error: 'Invalid email or password',
+      attemptsRemaining: remaining
+    });
+  }
+
+  // Successful login — clear failed attempts
+  clearAttempts(ip);
+
+  // Upgrade plain-text password to hash
   if (!isHashed(user.password)) {
     user.password = hashed;
     dbSet('users', users.map(u => u.id === user.id ? user : u));
   }
+
   const forceChange = DEFAULT_PLAINTEXT.has(password) || !!user._forcePasswordChange;
   const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
-  console.log('Login OK:', user.email);
+
+  audit(user.id, user.email, 'LOGIN_SUCCESS', ip);
+  console.log('Login OK:', user.email, 'from', ip);
+
   const { password: _pw, ...safeUser } = user;
   res.json({ user: safeUser, token, forcePasswordChange: forceChange });
 });
 
-app.post('/api/logout', (req, res) => res.json({ ok: true }));
+app.post('/api/logout', requireAuth, (req, res) => {
+  const user = dbGet('users',[]).find(u => u.id === req.userId);
+  audit(req.userId, user?.email, 'LOGOUT', getClientIp(req));
+  res.json({ ok: true });
+});
 
 app.get('/api/me', requireAuth, (req, res) => {
   const user = dbGet('users',[]).find(u => u.id === req.userId);
@@ -128,7 +311,7 @@ app.get('/api/me', requireAuth, (req, res) => {
   res.json(safe);
 });
 
-// ── State ─────────────────────────────────────────────────────────────
+// ── API: State ────────────────────────────────────────────────────────
 app.get('/api/state', requireAuth, (req, res) => {
   const state = {};
   for (const key of PERSISTENT_KEYS) state[key] = dbGet(key);
@@ -137,24 +320,29 @@ app.get('/api/state', requireAuth, (req, res) => {
 });
 
 app.post('/api/state', requireAuth, (req, res) => {
+  // Sanitize all incoming data before saving (item 4)
+  const sanitized = sanitizeDeep(req.body);
   db.transaction(() => {
     for (const key of PERSISTENT_KEYS) {
-      if (!(key in req.body)) continue;
+      if (!(key in sanitized)) continue;
       if (key === 'users') {
         const existing = dbGet('users', []);
-        const incoming = req.body.users || [];
-        const merged = incoming.map(u => ({ ...u, password: (existing.find(e => e.id === u.id) || {}).password || hashPassword('changeme') }));
+        const incoming = sanitized.users || [];
+        const merged = incoming.map(u => ({
+          ...u,
+          password: (existing.find(e => e.id === u.id) || {}).password || hashPassword('changeme')
+        }));
         existing.forEach(ex => { if (!merged.find(m => m.id === ex.id)) merged.push(ex); });
         dbSet('users', merged);
       } else {
-        dbSet(key, req.body[key]);
+        dbSet(key, sanitized[key]);
       }
     }
   })();
   res.json({ ok: true });
 });
 
-// ── Users ─────────────────────────────────────────────────────────────
+// ── API: Users ────────────────────────────────────────────────────────
 app.get('/api/users', requireAuth, (req, res) => {
   res.json(dbGet('users',[]).map(({ password: _pw, ...u }) => u));
 });
@@ -164,62 +352,104 @@ app.post('/api/users', requireRole('owner','operations'), (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'Name and email required' });
   if (!password) return res.status(400).json({ error: 'Password required' });
+  // Enforce complexity (item 7)
+  const pwErr = checkPasswordComplexity(password);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+  // Check email not already in use
+  if (users.find(u => u.email.toLowerCase() === email.toLowerCase())) {
+    return res.status(400).json({ error: 'Email already in use' });
+  }
   const nu = { ...req.body, id: 'u' + Date.now(), password: hashPassword(password) };
   dbSet('users', [...users, nu]);
+  audit(req.userId, null, 'USER_CREATED', getClientIp(req), email);
   const { password: _pw, ...safe } = nu;
   res.json(safe);
 });
 
 app.put('/api/users/:id', requireRole('owner','operations'), (req, res) => {
-  const users = dbGet('users', []);
+  const users  = dbGet('users', []);
   const target = users.find(u => u.id === req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found' });
-  if (req.user.role === 'operations' && target.role === 'owner') return res.status(403).json({ error: 'Cannot edit Owner accounts' });
+  if (req.user.role === 'operations' && target.role === 'owner')
+    return res.status(403).json({ error: 'Cannot edit Owner accounts' });
   const data = { ...target, ...req.body };
-  data.password = (req.body.password && req.body.password.length >= 8) ? hashPassword(req.body.password) : target.password;
+  if (req.body.password && req.body.password.length >= 1) {
+    const pwErr = checkPasswordComplexity(req.body.password);
+    if (pwErr) return res.status(400).json({ error: pwErr });
+    data.password = hashPassword(req.body.password);
+  } else {
+    data.password = target.password;
+  }
   dbSet('users', users.map(u => u.id === req.params.id ? data : u));
+  audit(req.userId, null, 'USER_UPDATED', getClientIp(req), target.email);
   const { password: _pw, ...safe } = data;
   res.json(safe);
 });
 
 app.delete('/api/users/:id', requireRole('owner'), (req, res) => {
   if (req.params.id === req.userId) return res.status(400).json({ error: 'Cannot delete your own account' });
+  const target = dbGet('users',[]).find(u => u.id === req.params.id);
   dbSet('users', dbGet('users',[]).filter(u => u.id !== req.params.id));
+  audit(req.userId, null, 'USER_DELETED', getClientIp(req), target?.email);
   res.json({ ok: true });
 });
 
 app.post('/api/users/:id/reset-password', requireRole('owner','operations'), (req, res) => {
   const { password } = req.body;
-  if (!password || password.length < 8) return res.status(400).json({ error: 'Min 8 characters' });
-  const users = dbGet('users', []);
+  const pwErr = checkPasswordComplexity(password);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+  const users  = dbGet('users', []);
   const target = users.find(u => u.id === req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found' });
-  if (req.user.role === 'operations' && target.role === 'owner') return res.status(403).json({ error: 'Cannot reset Owner passwords' });
-  dbSet('users', users.map(u => u.id === req.params.id ? { ...u, password: hashPassword(password), _forcePasswordChange: true } : u));
+  if (req.user.role === 'operations' && target.role === 'owner')
+    return res.status(403).json({ error: 'Cannot reset Owner passwords' });
+  dbSet('users', users.map(u =>
+    u.id === req.params.id ? { ...u, password: hashPassword(password), _forcePasswordChange: true } : u
+  ));
+  audit(req.userId, null, 'PASSWORD_RESET', getClientIp(req), target.email);
   console.log('Password reset:', target.email);
   res.json({ ok: true });
 });
 
 app.post('/api/users/:id/change-password', requireAuth, (req, res) => {
   const { password } = req.body;
-  if (!password || password.length < 8) return res.status(400).json({ error: 'Min 8 characters' });
-  const isSelf = req.userId === req.params.id;
+  const pwErr = checkPasswordComplexity(password);
+  if (pwErr) return res.status(400).json({ error: pwErr });
+  const isSelf  = req.userId === req.params.id;
   const reqUser = dbGet('users',[]).find(u => u.id === req.userId);
-  if (!isSelf && !['owner','operations'].includes(reqUser?.role)) return res.status(403).json({ error: 'Insufficient permissions' });
-  dbSet('users', dbGet('users',[]).map(u => u.id === req.params.id ? { ...u, password: hashPassword(password), _forcePasswordChange: false } : u));
+  if (!isSelf && !['owner','operations'].includes(reqUser?.role))
+    return res.status(403).json({ error: 'Insufficient permissions' });
+  const target = dbGet('users',[]).find(u => u.id === req.params.id);
+  dbSet('users', dbGet('users',[]).map(u =>
+    u.id === req.params.id ? { ...u, password: hashPassword(password), _forcePasswordChange: false } : u
+  ));
+  audit(req.userId, target?.email, 'PASSWORD_CHANGED', getClientIp(req));
   res.json({ ok: true });
 });
 
-// ── Health / debug ────────────────────────────────────────────────────
+// ── API: Audit log (item 6) — Owner only ─────────────────────────────
+app.get('/api/audit', requireRole('owner'), (req, res) => {
+  const logs = stmtAuditGet.all();
+  res.json(logs);
+});
+
+// ── API: Health ───────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   const txns = dbGet('transactions',[]);
   const cons  = dbGet('contacts',[]);
-  res.json({ status:'ok', transactions:txns.length, contacts:cons.length, fingerprint:`${txns.length}-${cons.length}-${txns[txns.length-1]?.id||0}-${cons[cons.length-1]?.id||0}`, uptime:Math.round(process.uptime()), auth:'JWT' });
+  res.json({
+    status: 'ok',
+    transactions: txns.length,
+    contacts: cons.length,
+    fingerprint: `${txns.length}-${cons.length}-${txns[txns.length-1]?.id||0}-${cons[cons.length-1]?.id||0}`,
+    uptime: Math.round(process.uptime()),
+    auth: 'JWT'
+  });
 });
 
 app.get('/api/session-check', (req, res) => {
   const token = getToken(req);
-  if (!token) return res.json({ authenticated:false, reason:'No Bearer token — check localStorage' });
+  if (!token) return res.json({ authenticated:false, reason:'No Bearer token' });
   try {
     const p = jwt.verify(token, JWT_SECRET);
     res.json({ authenticated:true, userId:p.userId, expires:new Date(p.exp*1000) });
@@ -232,4 +462,5 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 
 app.listen(PORT, () => {
   console.log(`🚀 Transaction Rocket on port ${PORT} | Auth: JWT | DB: ${DB_PATH}`);
+  if (!process.env.SESSION_SECRET) console.warn('⚠️  Set SESSION_SECRET in Render environment!');
 });
