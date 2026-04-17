@@ -133,7 +133,7 @@ function sanitizeDeep(obj) {
 const PERSISTENT_KEYS = [
   'transactions','contacts','users','templates','phases','customEvents',
   'documents','emailTemplates','savedViews','dailyActivity','chatSpaces',
-  'quickLinks','onboardingItems','teamChatWebhook','agentView'
+  'quickLinks','onboardingItems','teamChatWebhook','agentView','agentGoals'
 ];
 
 const SEED_USERS = [
@@ -149,7 +149,8 @@ const DEFAULT_SEED = {
   emailTemplates:[],savedViews:[],dailyActivity:{},teamChatWebhook:'',agentView:'Daniel Gutierrez',
   chatSpaces:[{id:'cs1',name:'Team Space',url:'',type:'team'},{id:'cs2',name:'Closing Space',url:'',type:'closing'},{id:'cs3',name:'Marketing Space',url:'',type:'marketing'},{id:'cs4',name:'Admin Space',url:'',type:'admin'}],
   quickLinks:[{id:'ql1',label:'KW Command',url:'https://agent.kw.com',color:'#B42318'},{id:'ql2',label:'Authentisign',url:'https://app.authentisign.com',color:'#1D4ED8'},{id:'ql3',label:'Paragon MLS',url:'https://paragonrels.com',color:'#027A48'},{id:'ql4',label:'BidWichita',url:'https://bidwichita.com',color:'#7C3AED'}],
-  onboardingItems:null
+  onboardingItems:null,
+  agentGoals:{}
 };
 
 // Seed only truly missing keys — never overwrite existing data
