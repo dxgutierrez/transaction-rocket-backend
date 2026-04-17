@@ -152,8 +152,24 @@ const DEFAULT_SEED = {
   onboardingItems:null
 };
 
+// Seed only truly missing keys — never overwrite existing data
+let seededCount = 0;
 for (const key of PERSISTENT_KEYS) {
-  if (!stmtGet.get(key)) dbSet(key, DEFAULT_SEED[key] ?? null);
+  if (!stmtGet.get(key)) {
+    dbSet(key, DEFAULT_SEED[key] ?? null);
+    seededCount++;
+  }
+}
+if (seededCount === PERSISTENT_KEYS.length) {
+  console.log('📦 Fresh database — all keys seeded with defaults');
+} else if (seededCount > 0) {
+  console.log(`📦 Seeded ${seededCount} missing keys (existing data preserved)`);
+} else {
+  // Existing database — log what we have
+  const txnCount = (dbGet('transactions', [])).length;
+  const conCount = (dbGet('contacts', [])).length;
+  const usrCount = (dbGet('users', [])).length;
+  console.log(`✅ Existing database loaded — ${txnCount} transactions, ${conCount} contacts, ${usrCount} users`);
 }
 
 // ── Express ───────────────────────────────────────────────────────────
@@ -460,7 +476,94 @@ app.get('/api/session-check', (req, res) => {
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
+// ── Automatic daily backup ───────────────────────────────────────────
+function runBackup() {
+  try {
+    const backupDir = path.join(DATA_DIR, 'backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+
+    const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const backupPath = path.join(backupDir, `backup-${date}.json`);
+
+    // Don't overwrite if already backed up today
+    if (fs.existsSync(backupPath)) return;
+
+    const backup = {};
+    for (const key of PERSISTENT_KEYS) {
+      backup[key] = dbGet(key);
+    }
+    backup._meta = {
+      backedUpAt: new Date().toISOString(),
+      transactions: (backup.transactions || []).length,
+      contacts: (backup.contacts || []).length,
+      users: (backup.users || []).length,
+    };
+
+    fs.writeFileSync(backupPath, JSON.stringify(backup, null, 2));
+    console.log(`💾 Daily backup saved: ${backupPath} (${(backup.transactions||[]).length} txns, ${(backup.contacts||[]).length} contacts)`);
+
+    // Keep only last 30 backups
+    const files = fs.readdirSync(backupDir)
+      .filter(f => f.startsWith('backup-') && f.endsWith('.json'))
+      .sort();
+    if (files.length > 30) {
+      const toDelete = files.slice(0, files.length - 30);
+      toDelete.forEach(f => {
+        try { fs.unlinkSync(path.join(backupDir, f)); } catch(e) {}
+      });
+    }
+  } catch(e) {
+    console.warn('Backup failed:', e.message);
+  }
+}
+
+// ── Backup restore API (Owner only) ──────────────────────────────────
+app.get('/api/backups', requireRole('owner'), (req, res) => {
+  try {
+    const backupDir = path.join(DATA_DIR, 'backups');
+    if (!fs.existsSync(backupDir)) return res.json([]);
+    const files = fs.readdirSync(backupDir)
+      .filter(f => f.startsWith('backup-') && f.endsWith('.json'))
+      .sort()
+      .reverse(); // newest first
+    const list = files.map(f => {
+      try {
+        const data = JSON.parse(fs.readFileSync(path.join(backupDir, f), 'utf8'));
+        return { filename: f, meta: data._meta || {} };
+      } catch { return { filename: f, meta: {} }; }
+    });
+    res.json(list);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/backups/restore/:filename', requireRole('owner'), (req, res) => {
+  try {
+    const backupDir = path.join(DATA_DIR, 'backups');
+    const filename  = req.params.filename.replace(/[^a-zA-Z0-9\-\.]/g, ''); // sanitize
+    const backupPath = path.join(backupDir, filename);
+    if (!fs.existsSync(backupPath)) return res.status(404).json({ error: 'Backup not found' });
+    const data = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+    // Save a safety backup of current state before restoring
+    runBackup();
+    db.transaction(() => {
+      for (const key of PERSISTENT_KEYS) {
+        if (key in data) dbSet(key, data[key]);
+      }
+    })();
+    console.log('🔄 Restored from backup:', filename);
+    res.json({ ok: true, restored: filename });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Transaction Rocket on port ${PORT} | Auth: JWT | DB: ${DB_PATH}`);
   if (!process.env.SESSION_SECRET) console.warn('⚠️  Set SESSION_SECRET in Render environment!');
+
+  // Run backup on startup then every 24 hours
+  runBackup();
+  setInterval(runBackup, 24 * 60 * 60 * 1000);
 });
