@@ -4117,6 +4117,66 @@ function renderSecurityTab(){
   auditCard.appendChild(auditBody);
   div.appendChild(auditCard);
   loadAuditLog(auditBody);
+
+  // ── Backup & Restore ───────────────────────────────────────────────
+  const bakCard=el('div',{'class':'card','style':{marginTop:'16px'}});
+  const bakHdr=el('div',{'class':'ch'});
+  bakHdr.innerHTML='<div class="ct">💾 Daily Backups</div>';
+  const bakRefresh=btn('↻ Refresh','bg bsm',()=>loadBackups(bakBody));
+  bakHdr.appendChild(bakRefresh);
+  bakCard.appendChild(bakHdr);
+  const bakBody=el('div',{'class':'cb','style':{padding:'0'}});
+
+  function loadBackups(container){
+    container.innerHTML='<div style="padding:14px;font-size:12px;color:var(--text4)">Loading...</div>';
+    fetch('/api/backups',{headers:authHeaders()}).then(r=>r.json()).then(backups=>{
+      container.innerHTML='';
+      const note=el('div',{'style':{padding:'10px 14px',fontSize:'12px',color:'var(--text3)',borderBottom:'1px solid var(--border)'}});
+      note.textContent='Backups run automatically every 24 hours and are kept for 30 days on the server disk.';
+      container.appendChild(note);
+      if(!backups.length){
+        const e=el('div',{'style':{padding:'14px',fontSize:'12px',color:'var(--text4)'}});
+        e.textContent='No backups yet — first backup runs at next server startup.';
+        container.appendChild(e);return;
+      }
+      backups.forEach(bk=>{
+        const row=el('div',{'style':{display:'flex',alignItems:'center',gap:'12px',padding:'9px 14px',borderBottom:'1px solid var(--border)',fontSize:'12px'}});
+        const info=el('div',{'style':{flex:'1'}});
+        const fname=el('div',{'style':{fontWeight:'600',color:'var(--text1)'}});
+        fname.textContent=bk.filename.replace('backup-','').replace('.json','');
+        const detail=el('div',{'style':{color:'var(--text3)',marginTop:'1px'}});
+        const m=bk.meta;
+        detail.textContent=m.backedUpAt
+          ? `${m.transactions||0} transactions · ${m.contacts||0} contacts · ${m.users||0} users · ${new Date(m.backedUpAt).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}`
+          : 'Backup file';
+        info.appendChild(fname);info.appendChild(detail);
+        const restoreBtn=btn('Restore','bdanger bsm',()=>{
+          if(!confirm('Restore from '+bk.filename+'?\n\nThis will REPLACE all current data with this backup. A safety backup of current data will be saved first.\n\nAre you sure?'))return;
+          restoreBtn.textContent='Restoring...';restoreBtn.disabled=true;
+          fetch('/api/backups/restore/'+bk.filename,{method:'POST',headers:authHeaders()})
+            .then(r=>r.json())
+            .then(d=>{
+              if(d.ok){
+                alert('✅ Restored successfully from '+bk.filename+'\n\nReloading app...');
+                loadAppState().then(()=>render());
+              } else {
+                alert('❌ Restore failed: '+(d.error||'Unknown error'));
+                restoreBtn.textContent='Restore';restoreBtn.disabled=false;
+              }
+            });
+        });
+        row.appendChild(info);row.appendChild(restoreBtn);
+        container.appendChild(row);
+      });
+    }).catch(()=>{
+      container.innerHTML='<div style="padding:14px;color:var(--red);font-size:12px">Error loading backups.</div>';
+    });
+  }
+
+  bakCard.appendChild(bakBody);
+  div.appendChild(bakCard);
+  loadBackups(bakBody);
+
   return div;
 }
 
