@@ -532,12 +532,29 @@ const SEED_CONTACTS = [
    social:{facebook:'',instagram:'',linkedin:''},contactType:'buyer'},
 ];
 
-const GOALS = {
-  'Daniel Gutierrez': {volume:5000000,units:20,appointments:150,agreements:40,listings:15,buyers:10,leadsDay:5,callsDay:20,contactsDay:10,appointmentsDay:2},
-  'Jesus':            {volume:2000000,units:10,appointments:80, agreements:20,listings:8, buyers:5, leadsDay:3,callsDay:15,contactsDay:8, appointmentsDay:1},
-  'Rachelle':         {volume:500000, units:3, appointments:30, agreements:8, listings:3, buyers:1, leadsDay:1,callsDay:10,contactsDay:5, appointmentsDay:1},
-  'Sophia':           {volume:500000, units:3, appointments:30, agreements:8, listings:3, buyers:1, leadsDay:1,callsDay:10,contactsDay:5, appointmentsDay:1},
+// Default goals — used when no custom goals set
+const DEFAULT_GOALS = {
+  volume:2000000, units:10, appointments:80, agreements:20,
+  listings:8, buyers:5, leadsDay:3, callsDay:15, contactsDay:8, appointmentsDay:1, socialDay:1
 };
+
+// Get goals for an agent — checks saved agentGoals first, falls back to defaults
+function getAgentGoals(agentName) {
+  const saved = (S.agentGoals || {})[agentName];
+  return saved ? {...DEFAULT_GOALS, ...saved} : {...DEFAULT_GOALS};
+}
+
+// Team goals = sum of all agent goals
+function getTeamGoals() {
+  const agents = S.users.filter(u=>u.active && ['owner','operations','agent','admin_level'].includes(u.role));
+  const totals = {...DEFAULT_GOALS};
+  Object.keys(totals).forEach(k => totals[k] = 0);
+  agents.forEach(u => {
+    const g = getAgentGoals(u.name);
+    Object.keys(totals).forEach(k => { totals[k] += (g[k] || 0); });
+  });
+  return totals;
+}
 
 const PRESET_TAGS = ['Buyer','Seller','Investor','First-Time Buyer','Repeat Client','Referral Partner','Vendor','Lender','Title','Inspector','Appraiser','Attorney','Hot Lead','Warm Lead','Cold Lead','VIP','Past Client','Sphere','Auction Bidder'];
 const LEAD_SOURCES = ['','Referral','Zillow','Realtor.com','Social Media','Facebook Ad','Google Ad','Open House','Cold Call','Website','KW Command','Door Knock','Sign Call','Networking','Other'];
@@ -584,6 +601,7 @@ async function saveState() {
         onboardingViewUser: S.onboardingViewUser,
         teamChatWebhook: S.teamChatWebhook,
         agentView: S.agentView,
+        agentGoals: S.agentGoals,
       };
       await fetch('/api/state', {
         method: 'POST',
@@ -610,6 +628,8 @@ async function loadAppState() {
     // calMonth is date object — restore it
     S.calMonth = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1);
     S.expandedPhases = {};
+    // Restore agentGoals
+    if (!S.agentGoals) S.agentGoals = {};
     // Migrate chatSpaces from old object format if needed
     if (S.chatSpaces && !Array.isArray(S.chatSpaces)) {
       const old = S.chatSpaces;
@@ -643,6 +663,7 @@ S = {
   onboardingItems: null,
   teamChatWebhook: '',
   agentView: 'Daniel Gutierrez',
+  agentGoals: {},
   // UI-only state (not persisted to server)
   currentUser: null,
   page: 'dashboard',
@@ -2075,6 +2096,192 @@ function renderTasks(){
 // ====================================================================
 // PRODUCTION
 // ====================================================================
+// ====================================================================
+// GOALS EDITOR
+// ====================================================================
+function showGoalsEditor() {
+  // Work on a deep copy so cancel actually cancels
+  const working = JSON.parse(JSON.stringify(S.agentGoals || {}));
+
+  const agentList = S.users.filter(u => u.active && ['owner','agent','admin_level'].includes(u.role));
+
+  // Goal field definitions — label, key, unit, description
+  const GOAL_FIELDS = [
+    { label:'Annual Volume',    key:'volume',        unit:'$',   desc:'Total closed sales volume target for the year' },
+    { label:'Closed Units',     key:'units',         unit:'',    desc:'Number of transactions to close this year' },
+    { label:'Appointments',     key:'appointments',  unit:'',    desc:'Total appointments set for the year' },
+    { label:'Agreements',       key:'agreements',    unit:'',    desc:'Buyer/Listing agreements written this year' },
+    { label:'Listings',         key:'listings',      unit:'',    desc:'Listing agreements target' },
+    { label:'Buyers',           key:'buyers',        unit:'',    desc:'Buyer agreements target' },
+    { label:'Daily Leads',      key:'leadsDay',      unit:'/day',desc:'New leads to generate each day' },
+    { label:'Daily Calls',      key:'callsDay',      unit:'/day',desc:'Dials/calls to make each day' },
+    { label:'Daily Contacts',   key:'contactsDay',   unit:'/day',desc:'Meaningful contacts to make each day' },
+    { label:'Daily Appointments',key:'appointmentsDay',unit:'/day',desc:'Appointments to set each day' },
+    { label:'Daily Social Post', key:'socialDay',    unit:'/day',desc:'Social media posts per day (0 or 1)' },
+  ];
+
+  let activeAgent = agentList[0]?.name || '';
+
+  const {close} = modal('⚙️ Agent Goals Editor', body => {
+    body.style.padding = '0';
+
+    // Layout: left agent list + right form
+    const layout = el('div', {'style': {display:'flex', height:'500px', overflow:'hidden'}});
+
+    // ── Left: agent selector ─────────────────────────────────────────
+    const left = el('div', {'style': {
+      width:'160px', flexShrink:'0', borderRight:'1px solid var(--border)',
+      overflowY:'auto', background:'var(--surface2)'
+    }});
+
+    const leftHdr = el('div', {'style': {
+      padding:'10px 12px', fontSize:'10px', fontWeight:'700',
+      letterSpacing:'1.5px', textTransform:'uppercase', color:'var(--text4)',
+      borderBottom:'1px solid var(--border)'
+    }});
+    leftHdr.textContent = 'Select Agent';
+    left.appendChild(leftHdr);
+
+    function buildAgentList() {
+      // Clear existing items (keep header)
+      while(left.children.length > 1) left.removeChild(left.lastChild);
+      agentList.forEach(u => {
+        const item = el('div', {'style': {
+          padding:'10px 12px', fontSize:'13px', fontWeight:'600', cursor:'pointer',
+          borderBottom:'1px solid var(--border)',
+          background: activeAgent === u.name ? 'var(--surface)' : 'transparent',
+          color: activeAgent === u.name ? 'var(--red)' : 'var(--text2)',
+          borderLeft: activeAgent === u.name ? '3px solid var(--red)' : '3px solid transparent',
+          transition:'all .12s'
+        }});
+        item.textContent = u.name.split(' ')[0];
+        item.onclick = () => { activeAgent = u.name; buildAgentList(); buildForm(); };
+        left.appendChild(item);
+      });
+    }
+
+    // ── Right: goals form ────────────────────────────────────────────
+    const right = el('div', {'style': {flex:'1', overflowY:'auto', padding:'16px'}});
+
+    function buildForm() {
+      right.innerHTML = '';
+      if (!working[activeAgent]) working[activeAgent] = {};
+
+      const agentHdr = el('div', {'style': {marginBottom:'14px'}});
+      agentHdr.innerHTML = `
+        <div style="font-size:15px;font-weight:700;color:var(--text1);margin-bottom:2px">${activeAgent}</div>
+        <div style="font-size:11px;color:var(--text4)">Set annual and daily goals. Leave blank to use team defaults.</div>
+      `;
+      right.appendChild(agentHdr);
+
+      // Reset to defaults button
+      const resetRow = el('div', {'style': {display:'flex', justifyContent:'flex-end', marginBottom:'12px'}});
+      const resetBtn = btn('↺ Reset to defaults', 'bg bxs', () => {
+        delete working[activeAgent];
+        buildForm();
+      });
+      resetRow.appendChild(resetBtn);
+      right.appendChild(resetRow);
+
+      // Annual goals section
+      const annualHdr = el('div', {'style': {
+        fontSize:'10px', fontWeight:'700', letterSpacing:'1.5px',
+        textTransform:'uppercase', color:'var(--text4)',
+        borderBottom:'1px solid var(--border)', paddingBottom:'6px', marginBottom:'10px'
+      }});
+      annualHdr.textContent = 'Annual Goals';
+      right.appendChild(annualHdr);
+
+      const annualGrid = el('div', {'style': {display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'16px'}});
+      GOAL_FIELDS.filter(f => !f.key.endsWith('Day')).forEach(field => {
+        const fg = el('div', {'class': 'fg'});
+        const lbl = el('label', {'class': 'fl'});
+        lbl.textContent = field.label + (field.unit ? ' (' + field.unit + ')' : '');
+        const inp = el('input', {'class': 'fi', 'type': 'number', 'min': '0',
+          'placeholder': 'Default: ' + DEFAULT_GOALS[field.key]
+        });
+        inp.value = working[activeAgent]?.[field.key] ?? '';
+        inp.oninput = e => {
+          if (!working[activeAgent]) working[activeAgent] = {};
+          const v = e.target.value.trim();
+          if (v === '') {
+            delete working[activeAgent][field.key];
+          } else {
+            working[activeAgent][field.key] = Number(v);
+          }
+        };
+        const hint = el('div', {'style': {fontSize:'10px', color:'var(--text4)', marginTop:'2px'}});
+        hint.textContent = field.desc;
+        fg.appendChild(lbl); fg.appendChild(inp); fg.appendChild(hint);
+        annualGrid.appendChild(fg);
+      });
+      right.appendChild(annualGrid);
+
+      // Daily goals section
+      const dailyHdr = el('div', {'style': {
+        fontSize:'10px', fontWeight:'700', letterSpacing:'1.5px',
+        textTransform:'uppercase', color:'var(--text4)',
+        borderBottom:'1px solid var(--border)', paddingBottom:'6px', marginBottom:'10px'
+      }});
+      dailyHdr.textContent = 'Daily Goals';
+      right.appendChild(dailyHdr);
+
+      const dailyGrid = el('div', {'style': {display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px'}});
+      GOAL_FIELDS.filter(f => f.key.endsWith('Day')).forEach(field => {
+        const fg = el('div', {'class': 'fg'});
+        const lbl = el('label', {'class': 'fl'});
+        lbl.textContent = field.label;
+        const inp = el('input', {'class': 'fi', 'type': 'number', 'min': '0',
+          'placeholder': 'Default: ' + DEFAULT_GOALS[field.key]
+        });
+        inp.value = working[activeAgent]?.[field.key] ?? '';
+        inp.oninput = e => {
+          if (!working[activeAgent]) working[activeAgent] = {};
+          const v = e.target.value.trim();
+          if (v === '') {
+            delete working[activeAgent][field.key];
+          } else {
+            working[activeAgent][field.key] = Number(v);
+          }
+        };
+        const hint = el('div', {'style': {fontSize:'10px', color:'var(--text4)', marginTop:'2px'}});
+        hint.textContent = field.desc;
+        fg.appendChild(lbl); fg.appendChild(inp); fg.appendChild(hint);
+        dailyGrid.appendChild(fg);
+      });
+      right.appendChild(dailyGrid);
+    }
+
+    buildAgentList();
+    buildForm();
+    layout.appendChild(left);
+    layout.appendChild(right);
+    body.appendChild(layout);
+
+    // Preview of team totals
+    const previewWrap = el('div', {'style': {
+      padding:'12px 16px', borderTop:'1px solid var(--border)',
+      background:'var(--surface2)', fontSize:'12px', color:'var(--text3)'
+    }});
+    previewWrap.innerHTML = '<strong style="color:var(--text2)">Team View</strong> shows the sum of all individual agent goals.';
+    body.appendChild(previewWrap);
+
+  }, f => {
+    f.appendChild(btn('Cancel', 'bg', () => close()));
+    f.appendChild(btn('Save All Goals', 'bp', () => {
+      // Clean up empty agent entries
+      Object.keys(working).forEach(agent => {
+        if (Object.keys(working[agent]).length === 0) delete working[agent];
+      });
+      S.agentGoals = working;
+      saveState();
+      render(); // re-render production with new goals
+      close();
+    }));
+  }, 'mdxl');
+}
+
+
 function renderProduction(){
   const div=el('div',{'class':'content','style':{background:'var(--bg)',minHeight:'100vh',padding:'0',margin:'-16px'}});
 
@@ -2085,13 +2292,14 @@ function renderProduction(){
   if(!S.dailyActivity)S.dailyActivity={};
   if(!S.dailyActivity[today])S.dailyActivity[today]={};
 
-  const agents=S.users.filter(u=>u.active&&['admin','manager','agent'].includes(u.role));
+  const agents=S.users.filter(u=>u.active&&['owner','agent','admin_level'].includes(u.role));
   const selectedAgent=S.agentView||(agents[0]?.name||'');
+  const isTeamView = selectedAgent === 'Team';
 
-  function getDayData(agent,date){return(S.dailyActivity[date]||{})[agent]||{calls:0,contacts:0,leads:0,appointments:0};}
+  function getDayData(agent,date){return(S.dailyActivity[date]||{})[agent]||{calls:0,contacts:0,leads:0,appointments:0,social:0};}
   function setDayData(agent,key,val){
     if(!S.dailyActivity[today])S.dailyActivity[today]={};
-    if(!S.dailyActivity[today][agent])S.dailyActivity[today][agent]={calls:0,contacts:0,leads:0,appointments:0};
+    if(!S.dailyActivity[today][agent])S.dailyActivity[today][agent]={calls:0,contacts:0,leads:0,appointments:0,social:0};
     S.dailyActivity[today][agent][key]=Math.max(0,parseInt(val)||0);
     saveState();
     const container=document.getElementById('prod-container');
@@ -2136,10 +2344,23 @@ function renderProduction(){
   const titleRow=el('div',{'style':{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'16px',flexWrap:'wrap',gap:'12px'}});
   const titleLeft=el('div');
   titleLeft.innerHTML=`<div style="font-family:'Sora',sans-serif;font-size:1.4rem;font-weight:700;color:#fff;letter-spacing:.5px">📈 Agent Production</div><div style="font-size:.72rem;color:#c9a84c;letter-spacing:2px;text-transform:uppercase;margin-top:2px">KW MAPS Performance Dashboard · ${new Date().toLocaleDateString('en-US',{month:'long',year:'numeric'})}</div>`;
+  // Goals editor button — owner only
+  if(S.currentUser?.role==='owner'){
+    const goalsBtn=el('button',{'class':'btn bg bsm','style':{marginTop:'6px',fontSize:'11px'}});
+    goalsBtn.textContent='⚙️ Edit Goals';
+    goalsBtn.onclick=()=>showGoalsEditor();
+    titleLeft.appendChild(goalsBtn);
+  }
   titleRow.appendChild(titleLeft);
 
   // Agent tab switcher
   const tabRow=el('div',{'style':{display:'flex',gap:'0',borderRadius:'10px 10px 0 0',overflow:'hidden',alignSelf:'flex-end'}});
+  // Team tab first
+  const teamTab=el('div',{'style':{padding:'10px 20px',fontSize:'.78rem',fontWeight:'700',cursor:'pointer',background:selectedAgent==='Team'?'#c9a84c':'rgba(255,255,255,.06)',color:selectedAgent==='Team'?'#0f1923':'rgba(255,255,255,.6)',borderRight:'1px solid rgba(255,255,255,.1)',transition:'all .15s',letterSpacing:'.5px',textTransform:'uppercase',whiteSpace:'nowrap'}});
+  teamTab.textContent='Team';
+  teamTab.onclick=()=>setState({agentView:'Team'});
+  tabRow.appendChild(teamTab);
+  // Individual agent tabs
   agents.forEach(u=>{
     const isActive=u.name===selectedAgent;
     const tab=el('div',{'style':{padding:'10px 20px',fontSize:'.78rem',fontWeight:'700',cursor:'pointer',background:isActive?'#c9a84c':'rgba(255,255,255,.06)',color:isActive?'#0f1923':'rgba(255,255,255,.6)',borderRight:'1px solid rgba(255,255,255,.1)',transition:'all .15s',letterSpacing:'.5px',textTransform:'uppercase',whiteSpace:'nowrap'}});
@@ -2155,7 +2376,7 @@ function renderProduction(){
   const body=el('div',{'style':{padding:'20px 28px',display:'grid',gap:'18px'}});
 
   const agent=selectedAgent;
-  const goal=GOALS[agent]||{volume:2000000,units:10,appointments:80,agreements:20,listings:8,buyers:5,leadsDay:3,callsDay:15,contactsDay:8,appointmentsDay:1};
+    const goal = agent==='Team' ? getTeamGoals() : getAgentGoals(agent);
   const closed=closedTxns(agent);
   const active=activeTxns(agent);
   const cVol=closedVol(closed);
@@ -2241,6 +2462,7 @@ function renderProduction(){
   dayBody.appendChild(dayTracker('contacts','Contacts Made','🤝','contactsDay','#0891b2'));
   dayBody.appendChild(dayTracker('leads','New Leads','⚡','leadsDay','#f59e0b'));
   dayBody.appendChild(dayTracker('appointments','Appointments Set','📅','appointmentsDay','#8b5cf6'));
+  dayBody.appendChild(dayTracker('social','Posted on Social Media','📱','socialDay','#059669'));
 
   // Weekly total preview
   const dayDivider=el('div',{'style':{borderTop:'1px solid #f0f0f0',paddingTop:'12px',marginTop:'4px'}});
