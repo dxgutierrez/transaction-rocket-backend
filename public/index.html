@@ -2678,7 +2678,7 @@ function renderProduction(){
     const ag=u.name;
     const cl=closedTxns(ag);const ac=activeTxns(ag);
     const vol=closedVol(cl);const act=getActivityTotals(ag);
-    const g=GOALS[ag]||{volume:2000000,units:10};
+    const g=getAgentGoals(ag);
     const vp2=Math.min(100,Math.round(vol/g.volume*100));
     const isSelected=ag===agent;
     const tr=el('tr',{'style':{background:isSelected?'rgba(201,168,76,.06)':'transparent',borderBottom:'1px solid var(--b3)',cursor:'pointer',transition:'background .12s'}});
