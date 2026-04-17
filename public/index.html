@@ -1679,7 +1679,7 @@ function showNewTxnModal(){
     body.appendChild(g);
     const ag=el('div',{'class':'fg'});ag.appendChild(el('label',{'class':'fl'},'Agent(s)'));
     const ar=el('div',{'style':{display:'flex',gap:'6px',flexWrap:'wrap',marginTop:'4px'}});
-    S.users.filter(u=>u.active&&(u.role==='admin'||u.role==='manager'||u.role==='agent')).forEach(u=>{
+    S.users.filter(u=>u.active&&['owner','agent','admin_level'].includes(u.role)).forEach(u=>{
       const b=el('button',{'class':'btn bxs '+(data.agents.includes(u.name)?'bp':'bg')});b.textContent=u.name;
       b.onclick=()=>{if(data.agents.includes(u.name))data.agents=data.agents.filter(a=>a!==u.name);else data.agents=[...data.agents,u.name];b.className='btn bxs '+(data.agents.includes(u.name)?'bp':'bg');};
       ar.appendChild(b);
@@ -2376,15 +2376,39 @@ function renderProduction(){
   const body=el('div',{'style':{padding:'20px 28px',display:'grid',gap:'18px'}});
 
   const agent=selectedAgent;
-    const goal = agent==='Team' ? getTeamGoals() : getAgentGoals(agent);
-  const closed=closedTxns(agent);
-  const active=activeTxns(agent);
+  const goal = agent==='Team' ? getTeamGoals() : getAgentGoals(agent);
+  // Team view aggregates across all agents
+  const agentNames = agents.map(u=>u.name);
+  const closed = agent==='Team'
+    ? S.transactions.filter(t=>t.status==='closed'&&(t.agents||[]).some(a=>agentNames.includes(a)))
+    : closedTxns(agent);
+  const active = agent==='Team'
+    ? S.transactions.filter(t=>t.status==='active'&&(t.agents||[]).some(a=>agentNames.includes(a)))
+    : activeTxns(agent);
   const cVol=closedVol(closed);
   const pVol=pipelineVol(active);
   const gci=estGCI(cVol);
-  const todayData=getDayData(agent,today);
-  const monthActivity=getMonthActivity(agent,todayMonth);
-  const allActivity=getActivityTotals(agent);
+  const todayData = agent==='Team'
+    ? (()=>{
+        const merged={calls:0,contacts:0,leads:0,appointments:0,social:0};
+        agentNames.forEach(n=>{const d=getDayData(n,today);Object.keys(merged).forEach(k=>merged[k]+=(d[k]||0));});
+        return merged;
+      })()
+    : getDayData(agent,today);
+  const monthActivity = agent==='Team'
+    ? (()=>{
+        const merged={calls:0,contacts:0,leads:0,appointments:0};
+        agentNames.forEach(n=>{const m=getMonthActivity(n,todayMonth);Object.keys(merged).forEach(k=>merged[k]+=(m[k]||0));});
+        return merged;
+      })()
+    : getMonthActivity(agent,todayMonth);
+  const allActivity = agent==='Team'
+    ? (()=>{
+        const merged={calls:0,contacts:0,leads:0,appointments:0,days:0};
+        agentNames.forEach(n=>{const a=getActivityTotals(n);Object.keys(merged).forEach(k=>merged[k]+=(a[k]||0));});
+        return merged;
+      })()
+    : getActivityTotals(agent);
 
   // Pacing calculation: day of year / 365
   const dayOfYear=Math.floor((new Date()-new Date(todayYear+'-01-01'))/86400000)+1;
@@ -2458,11 +2482,23 @@ function renderProduction(){
     return row;
   }
 
-  dayBody.appendChild(dayTracker('calls','Dials / Calls','📞','callsDay','#b40101'));
-  dayBody.appendChild(dayTracker('contacts','Contacts Made','🤝','contactsDay','#0891b2'));
-  dayBody.appendChild(dayTracker('leads','New Leads','⚡','leadsDay','#f59e0b'));
-  dayBody.appendChild(dayTracker('appointments','Appointments Set','📅','appointmentsDay','#8b5cf6'));
-  dayBody.appendChild(dayTracker('social','Posted on Social Media','📱','socialDay','#059669'));
+  if(agent==='Team'){
+    // Team view — show read-only totals, no +/- buttons
+    [['📞','Dials / Calls','calls','callsDay','#b40101'],['🤝','Contacts Made','contacts','contactsDay','#0891b2'],['⚡','New Leads','leads','leadsDay','#f59e0b'],['📅','Appointments Set','appointments','appointmentsDay','#8b5cf6'],['📱','Social Posts','social','socialDay','#059669']].forEach(([icon,label,key,goalKey,color])=>{
+      const val=todayData[key]||0;
+      const dailyGoal=goal[goalKey]||0;
+      const pct=dailyGoal?Math.min(100,Math.round(val/dailyGoal*100)):0;
+      const row=el('div',{'style':{marginBottom:'14px'}});
+      row.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px"><div style="display:flex;align-items:center;gap:6px"><span>${icon}</span><span style="font-size:.78rem;font-weight:600;color:#333">${label}</span></div><div style="font-size:1.1rem;font-weight:700;color:${color}">${val}<span style="font-size:.65rem;font-weight:400;color:#aaa"> / ${dailyGoal}</span></div></div><div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct>=100?'#16a34a':color};border-radius:3px;transition:width .4s ease"></div></div><div style="font-size:.62rem;margin-top:2px;color:${pct>=100?'#16a34a':'#aaa'}">${pct>=100?'✓ Team goal hit!':val+' of '+dailyGoal+' — '+pct+'%'}</div>`;
+      dayBody.appendChild(row);
+    });
+  } else {
+    dayBody.appendChild(dayTracker('calls','Dials / Calls','📞','callsDay','#b40101'));
+    dayBody.appendChild(dayTracker('contacts','Contacts Made','🤝','contactsDay','#0891b2'));
+    dayBody.appendChild(dayTracker('leads','New Leads','⚡','leadsDay','#f59e0b'));
+    dayBody.appendChild(dayTracker('appointments','Appointments Set','📅','appointmentsDay','#8b5cf6'));
+    dayBody.appendChild(dayTracker('social','Posted on Social Media','📱','socialDay','#059669'));
+  }
 
   // Weekly total preview
   const dayDivider=el('div',{'style':{borderTop:'1px solid #f0f0f0',paddingTop:'12px',marginTop:'4px'}});
