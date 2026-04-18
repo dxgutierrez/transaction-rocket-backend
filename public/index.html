@@ -2292,7 +2292,7 @@ function renderProduction(){
   if(!S.dailyActivity)S.dailyActivity={};
   if(!S.dailyActivity[today])S.dailyActivity[today]={};
 
-  const agents=S.users.filter(u=>u.active&&['owner','agent','admin_level'].includes(u.role));
+  const agents=S.users.filter(u=>u.active&&(u.showOnProduction===true||(u.showOnProduction===undefined&&['owner','agent','admin_level'].includes(u.role))));
   const selectedAgent=S.agentView||(agents[0]?.name||'');
   const isTeamView = selectedAgent === 'Team';
 
@@ -4603,6 +4603,19 @@ function showUserModal(existing){
       presetBtn.appendChild(pb);
     });
     body.appendChild(presetBtn);
+    // Show on Production Dashboard toggle
+    body.appendChild(el('div',{'class':'divider'}));
+    const prodToggleWrap=el('div',{'class':'perm-toggle','style':{marginBottom:'12px',background:'var(--surface2)',padding:'10px 12px',borderRadius:'8px',border:'1px solid var(--border)'}});
+    const prodTog=el('div',{'class':'toggle-sw'+(data.showOnProduction!==false&&['owner','agent','admin_level'].includes(data.role)?' on':data.showOnProduction===true?' on':'')});
+    const prodKnob=el('div',{'class':'toggle-knob'});prodTog.appendChild(prodKnob);
+    prodTog.onclick=()=>{
+      data.showOnProduction=!prodTog.classList.contains('on');
+      prodTog.className='toggle-sw'+(data.showOnProduction?' on':'');
+    };
+    const prodLbl=el('div',{'style':{flex:'1'}});
+    prodLbl.innerHTML='<div style="font-weight:600;font-size:.82rem;color:var(--text1)">Show on Production Dashboard</div><div style="font-size:.72rem;color:var(--text3);margin-top:1px">This agent will appear as a tab on the Production page with their own goals and activity tracking.</div>';
+    prodToggleWrap.appendChild(prodTog);prodToggleWrap.appendChild(prodLbl);
+    body.appendChild(prodToggleWrap);
     const permLbl=el('div',{'style':{fontSize:'.67rem',fontWeight:'600',letterSpacing:'1.5px',textTransform:'uppercase',color:'var(--text4)',marginBottom:'10px'}});permLbl.textContent='Page Access Permissions';body.appendChild(permLbl);
     PAGES.forEach(page=>{
       const row=el('div',{'class':'perm-toggle'});
