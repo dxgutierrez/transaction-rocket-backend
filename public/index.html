@@ -331,7 +331,7 @@ function unesc(s){
 const DEFAULT_PHASES = {
   auction:['Pre-Auction Setup','Marketing Active','Auction Day','Under Contract','Post-Closing'],
   traditional:['Pre-Listing','Active Listing','Under Contract','Inspection/Appraisal','Closing Prep','Closed'],
-  buyer:['Pre-Appointment','Buyer Agency Signed','Home Search','Under Contract','Inspection/Appraisal','Closing Prep','Closed']
+  buyer:['New Buyer','Active Buyer','Pending - Under Contract','Pending - Inspection/Appraisal','Pending - Closing Prep','Closed']
 };
 
 const DEFAULT_TEMPLATES = {
@@ -419,50 +419,55 @@ const DEFAULT_TEMPLATES = {
     ]
   },
   buyer:{
-    'Pre-Appointment':[
+    'New Buyer':[
       {id:'b1',task:'Schedule buyer consultation',assignee:'Daniel',dueDays:0,dueRef:'buyerAgencyEffective'},
       {id:'b2',task:'Send pre-consultation questionnaire',assignee:'Rachelle',dueDays:-1,dueRef:'buyerAgencyEffective'},
       {id:'b3',task:'Research buyer needs & wants',assignee:'Daniel',dueDays:-1,dueRef:'buyerAgencyEffective'},
       {id:'b4',task:'Prepare market overview',assignee:'Jesus',dueDays:-1,dueRef:'buyerAgencyEffective'},
-      {id:'b5',task:'Confirm lender pre-approval',assignee:'Rachelle',dueDays:0,dueRef:'buyerAgencyEffective'},
+      {id:'b5',task:'Confirm lender pre-approval status',assignee:'Rachelle',dueDays:0,dueRef:'buyerAgencyEffective'},
+      {id:'b5b',task:'Refer to preferred lender if not pre-approved',assignee:'Daniel',dueDays:0,dueRef:'buyerAgencyEffective'},
+      {id:'b5c',task:'Execute buyer agency agreement',assignee:'Daniel',dueDays:0,dueRef:'buyerAgencyEffective'},
+      {id:'b5d',task:'Send welcome packet',assignee:'Rachelle',dueDays:1,dueRef:'buyerAgencyEffective'},
     ],
-    'Buyer Agency Signed':[
-      {id:'b6',task:'Execute buyer agency agreement',assignee:'Daniel',dueDays:0,dueRef:'buyerAgencyEffective'},
-      {id:'b7',task:'Send welcome packet',assignee:'Rachelle',dueDays:1,dueRef:'buyerAgencyEffective'},
-      {id:'b8',task:'Set up MLS search alerts',assignee:'Jesus',dueDays:1,dueRef:'buyerAgencyEffective'},
-      {id:'b9',task:'Discuss wish list & priorities',assignee:'Daniel',dueDays:1,dueRef:'buyerAgencyEffective'},
-    ],
-    'Home Search':[
-      {id:'b10',task:'Schedule home tours',assignee:'Daniel',dueDays:0,dueRef:'buyerAgencyEffective'},
+    'Active Buyer':[
+      {id:'b8',task:'Set up MLS search alerts',assignee:'Jesus',dueDays:0,dueRef:'buyerAgencyEffective'},
+      {id:'b9',task:'Discuss wish list & priorities',assignee:'Daniel',dueDays:0,dueRef:'buyerAgencyEffective'},
+      {id:'b10',task:'Schedule first home tours',assignee:'Daniel',dueDays:2,dueRef:'buyerAgencyEffective'},
       {id:'b11',task:'Weekly check-in with buyers',assignee:'Daniel',dueDays:7,dueRef:'buyerAgencyEffective'},
       {id:'b12',task:'Refine search criteria if needed',assignee:'Daniel',dueDays:14,dueRef:'buyerAgencyEffective'},
+      {id:'b12b',task:'Review and submit offers as needed',assignee:'Daniel',dueDays:0,dueRef:'buyerAgencyEffective'},
     ],
-    'Under Contract':[
+    'Pending - Under Contract':[
       {id:'b13',task:'Submit accepted offer',assignee:'Daniel',dueDays:0,dueRef:'contractDate'},
       {id:'b14',task:'Deliver contract to lender',assignee:'Rachelle',dueDays:1,dueRef:'contractDate'},
       {id:'b15',task:'Verify earnest money sent',assignee:'Rachelle',dueDays:0,dueRef:'emDue'},
       {id:'b16',task:'Open escrow / title',assignee:'Rachelle',dueDays:1,dueRef:'contractDate'},
+      {id:'b16b',task:'Send congratulations to buyers',assignee:'Daniel',dueDays:0,dueRef:'contractDate'},
+      {id:'b16c',task:'Notify Google Chat — new contract',assignee:'Rachelle',dueDays:0,dueRef:'contractDate'},
     ],
-    'Inspection/Appraisal':[
+    'Pending - Inspection/Appraisal':[
       {id:'b17',task:'Schedule inspection',assignee:'Daniel',dueDays:0,dueRef:'inspectionDate'},
       {id:'b18',task:'Attend inspection',assignee:'Daniel',dueDays:0,dueRef:'inspectionDate'},
       {id:'b19',task:'Review inspection report with buyers',assignee:'Daniel',dueDays:2,dueRef:'inspectionDate'},
-      {id:'b20',task:'Submit repair request / R&R',assignee:'Daniel',dueDays:0,dueRef:'inspectionRRDue'},
-      {id:'b21',task:'Appraisal ordered',assignee:'Rachelle',dueDays:0,dueRef:'appraisalDate'},
+      {id:'b20',task:'Submit repair request / response',assignee:'Daniel',dueDays:0,dueRef:'inspectionRRDue'},
+      {id:'b21',task:'Appraisal ordered by lender',assignee:'Rachelle',dueDays:0,dueRef:'appraisalDate'},
       {id:'b22',task:'Follow up on appraisal value',assignee:'Rachelle',dueDays:0,dueRef:'appraisalDue'},
+      {id:'b22b',task:'Confirm loan approval / clear to close',assignee:'Rachelle',dueDays:-7,dueRef:'closingDate'},
     ],
-    'Closing Prep':[
-      {id:'b23',task:'Review closing disclosure',assignee:'Rachelle',dueDays:-3,dueRef:'closingDate'},
+    'Pending - Closing Prep':[
+      {id:'b23',task:'Review closing disclosure with buyers',assignee:'Rachelle',dueDays:-3,dueRef:'closingDate'},
       {id:'b24',task:'Schedule final walkthrough',assignee:'Daniel',dueDays:-1,dueRef:'closingDate'},
-      {id:'b25',task:'Confirm wire / cashier check',assignee:'Rachelle',dueDays:-1,dueRef:'closingDate'},
+      {id:'b25',task:'Confirm wire or cashier check amount',assignee:'Rachelle',dueDays:-1,dueRef:'closingDate'},
       {id:'b26',task:'Confirm movers / utilities transfer',assignee:'Rachelle',dueDays:-2,dueRef:'closingDate'},
+      {id:'b26b',task:'Confirm closing time and location with buyers',assignee:'Daniel',dueDays:-1,dueRef:'closingDate'},
     ],
     'Closed':[
       {id:'b27',task:'Attend closing',assignee:'Daniel',dueDays:0,dueRef:'closingDate'},
       {id:'b28',task:'Deliver keys to buyers',assignee:'Daniel',dueDays:0,dueRef:'closingDate'},
       {id:'b29',task:'Send welcome home gift',assignee:'Daniel',dueDays:3,dueRef:'closingDate'},
       {id:'b30',task:'Request reviews / referrals',assignee:'Sophia',dueDays:7,dueRef:'closingDate'},
-      {id:'b31',task:'Archive transaction file',assignee:'Rachelle',dueDays:10,dueRef:'closingDate'},
+      {id:'b31',task:'Schedule 1-week post-close check-in',assignee:'Daniel',dueDays:7,dueRef:'closingDate'},
+      {id:'b32',task:'Archive transaction file',assignee:'Rachelle',dueDays:10,dueRef:'closingDate'},
     ]
   }
 };
