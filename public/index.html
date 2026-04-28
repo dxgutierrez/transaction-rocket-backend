@@ -322,6 +322,12 @@ tr:last-child td{border-bottom:none}
 const TODAY = new Date();
 const SK = 'dfm_v3';
 
+// Decode HTML entities accidentally stored by old sanitizer
+function unesc(s){
+  if(typeof s !== 'string') return s;
+  return s.replace(/&#x2F;/g,'/').replace(/&#x27;/g,"'").replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+}
+
 const DEFAULT_PHASES = {
   auction:['Pre-Auction Setup','Marketing Active','Auction Day','Under Contract','Post-Closing'],
   traditional:['Pre-Listing','Active Listing','Under Contract','Inspection/Appraisal','Closing Prep','Closed'],
@@ -1172,7 +1178,7 @@ function renderDashboard() {
   else urgTasks.slice(0,7).forEach(t=>{
     const r=el('div',{'style':{display:'flex',alignItems:'center',gap:'9px',padding:'8px 15px',borderBottom:'1px solid rgba(255,255,255,.03)'}});
     const du=daysUntil(t.dueDate);
-    r.innerHTML=`<div style="width:4px;height:30px;border-radius:2px;background:${isOvr(t.dueDate)?'var(--red)':isUrg(t.dueDate)?'var(--amber)':'var(--green)'};flex-shrink:0"></div><div style="flex:1"><div style="font-size:.8rem;font-weight:500;color:var(--navy)">${t.task}</div><div style="font-size:.68rem;color:var(--muted)">${t.addr} · ${t.assignee}</div></div><div style="font-size:.73rem;font-weight:600;color:${isOvr(t.dueDate)?'var(--red2)':isUrg(t.dueDate)?'var(--amber)':'var(--slate2)'};">${isOvr(t.dueDate)?Math.abs(du)+'d over':du===0?'Today':du===1?'Tomorrow':du+'d'}</div>`;
+    r.innerHTML=`<div style="width:4px;height:30px;border-radius:2px;background:${isOvr(t.dueDate)?'var(--red)':isUrg(t.dueDate)?'var(--amber)':'var(--green)'};flex-shrink:0"></div><div style="flex:1"><div style="font-size:.8rem;font-weight:500;color:var(--navy)">${unesc(t.task)}</div><div style="font-size:.68rem;color:var(--muted)">${t.addr} · ${t.assignee}</div></div><div style="font-size:.73rem;font-weight:600;color:${isOvr(t.dueDate)?'var(--red2)':isUrg(t.dueDate)?'var(--amber)':'var(--slate2)'};">${isOvr(t.dueDate)?Math.abs(du)+'d over':du===0?'Today':du===1?'Tomorrow':du+'d'}</div>`;
     tc.appendChild(r);
   });
   grid.appendChild(tc);
@@ -1661,7 +1667,7 @@ function showOfferModal(txn, existingOffer){
 // ====================================================================
 function showNewTxnModal(){
   let type='buyer';
-  let data={address:'',agents:[S.currentUser?.name||'Daniel'],status:'active',client1Name:'',client1Phone:'',client1Email:''};
+  let data={address:'',agents:[],status:'active',client1Name:'',client1Phone:'',client1Email:''};
   const {close}=modal('New Transaction',body=>{
     const tg=el('div',{'class':'fg'});tg.appendChild(el('label',{'class':'fl'},'Transaction Type'));
     const tr=el('div',{'style':{display:'flex',gap:'7px',marginTop:'5px'}});
@@ -2083,7 +2089,7 @@ function renderTasks(){
   function trow(t){
     const r=el('div',{'class':'tr2'});const du=t.dueDate?daysUntil(t.dueDate):null;
     const bc=isOvr(t.dueDate)?'tbh':isUrg(t.dueDate)?'tbm':t.dueDate?'tbl':'tbn';
-    r.innerHTML=`<div class="tbar ${bc}"></div><div style="flex:1"><div style="font-weight:500;color:var(--white);font-size:.83rem">${t.task}</div><div style="font-size:.68rem;color:var(--muted);margin-top:1px">${t.addr} · ${t.phase} · ${t.assignee}</div></div><div style="text-align:right;flex-shrink:0"><div style="font-size:.73rem;font-weight:600;color:${isOvr(t.dueDate)?'var(--red2)':isUrg(t.dueDate)?'var(--amber)':t.dueDate?'var(--slate2)':'var(--muted)'}">${t.dueDate?(isOvr(t.dueDate)?Math.abs(du)+'d over':du===0?'Today':du===1?'Tomorrow':du+'d'):'-'}</div><div style="font-size:.63rem;color:var(--muted)">${t.assignee}</div></div>`;
+    r.innerHTML=`<div class="tbar ${bc}"></div><div style="flex:1"><div style="font-weight:500;color:var(--white);font-size:.83rem">${unesc(t.task)}</div><div style="font-size:.68rem;color:var(--muted);margin-top:1px">${t.addr} · ${t.phase} · ${t.assignee}</div></div><div style="text-align:right;flex-shrink:0"><div style="font-size:.73rem;font-weight:600;color:${isOvr(t.dueDate)?'var(--red2)':isUrg(t.dueDate)?'var(--amber)':t.dueDate?'var(--slate2)':'var(--muted)'}">${t.dueDate?(isOvr(t.dueDate)?Math.abs(du)+'d over':du===0?'Today':du===1?'Tomorrow':du+'d'):'-'}</div><div style="font-size:.63rem;color:var(--muted)">${t.assignee}</div></div>`;
     return r;
   }
   if(dueSoon.length){const st=el('div',{'class':'sec-title'});st.textContent='🔴 Due Soon / Overdue';div.appendChild(st);dueSoon.forEach(t=>div.appendChild(trow(t)));}
