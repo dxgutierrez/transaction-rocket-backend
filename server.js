@@ -103,12 +103,10 @@ setInterval(() => {
 // ── Input sanitization ────────────────────────────────────────────────
 function sanitize(val) {
   if (typeof val !== 'string') return val;
+  // Only strip actual HTML injection characters — slashes are safe in text
   return val
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;')
-    .replace(/\//g, '&#x2F;');
+    .replace(/>/g, '&gt;');
 }
 
 function sanitizeDeep(obj) {
@@ -139,7 +137,7 @@ const PERSISTENT_KEYS = [
 const SEED_USERS = [
   { id:'u1', name:'Daniel Gutierrez', email:'dxgutierrez@kw.com', password:'admin123', role:'owner', active:true, chatWebhook:'', perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:true,production:true,documents:true,settings:true,onboarding:true} },
   { id:'u2', name:'Rachelle', email:'operations@bidwichita.com', password:'rachelle123', role:'operations', active:true, chatWebhook:'', perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:true,production:true,documents:true,settings:true,onboarding:true} },
-  { id:'u5', name:'Angel Perez', email:'transactions@bidwichita.com', password:'angel123', role:'agent', active:true, chatWebhook:'', perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:false,production:false,documents:true,settings:false,onboarding:true} },
+  { id:'u5', name:'Angel Perez', email:'transactions@bidwichita.com', password:'angel123', role:'agent', active:true, chatWebhook:'', showOnProduction:false, perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:false,production:false,documents:true,settings:false,onboarding:true} },
   { id:'u3', name:'Jesus', email:'listings@bidwichita.com', password:'auction123', role:'agent', active:true, chatWebhook:'', perms:{dashboard:true,transactions:true,contacts:true,calendar:true,tasks:true,marketing:false,production:false,documents:true,settings:false,onboarding:true} },
   { id:'u4', name:'Sophia', email:'sophia@bidwichita.com', password:'auction123', role:'marketing', active:true, chatWebhook:'', perms:{dashboard:true,transactions:false,contacts:false,calendar:true,tasks:true,marketing:true,production:false,documents:false,settings:false,onboarding:false} }
 ];
